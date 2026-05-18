@@ -1,0 +1,30 @@
+{
+  "manifest_version": 3,
+  "name": "Mila Meeting Detector",
+  "version": "0.1.0",
+  "description": "Detects supported web meetings and starts Mila.",
+  "permissions": ["tabs", "storage"],
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://*.zoom.us/*",
+    "https://teams.microsoft.com/*",
+    "https://web.whatsapp.com/*",
+    "http://localhost:3002/*",
+    "http://localhost:4000/*"
+  ],
+  "background": {
+    "service_worker": "src/background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "https://meet.google.com/*",
+        "https://*.zoom.us/*",
+        "https://teams.microsoft.com/*",
+        "https://web.whatsapp.com/*"
+      ],
+      "js": ["src/content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

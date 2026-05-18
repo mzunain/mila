@@ -1,0 +1,14 @@
+{
+  "name": "create-features-and-prs-skill",
+  "version": "1.0.0",
+  "description": "Skill to automatically create feature branches, commits, PRs, and merge them",
+  "main": "index.js",
+  "author": "Muhammad Zulqarnain",
+  "license": "MIT",
+  "dependencies": {
+    "minimist": "^1.2.8"
+  },
+  "scripts": {
+    "start": "node index.js"
+  }
+}

@@ -7,7 +7,7 @@
     "dev": "pnpm --filter @mila/shared build && pnpm --parallel --filter @mila/api --filter @mila/web dev",
     "dev:web": "pnpm --filter @mila/web dev",
     "dev:api": "pnpm --filter @mila/api dev",
-    "dev:asr": "cd apps/asr-worker && uvicorn main:app --host 0.0.0.0 --port 9000",
+    "dev:asr": "cd apps/asr-worker && .venv/bin/uvicorn main:app --host 127.0.0.1 --port 9000",
     "dev:desktop": "pnpm --filter @mila/shared build && pnpm --filter @mila/electron dev",
     "build": "pnpm --filter @mila/shared build && pnpm --filter @mila/api build && pnpm --filter @mila/web build",
     "build:desktop": "pnpm --filter @mila/electron build:ts",

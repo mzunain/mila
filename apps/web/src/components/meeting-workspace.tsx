@@ -142,6 +142,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
+  const [copied, setCopied] = useState(false);
   const openCommandPalette = useCallback(() => setCommandOpen(true), []);
   const closeCommandPalette = useCallback(() => setCommandOpen(false), []);
   const wsRef = useRef<WebSocket | null>(null);
@@ -151,8 +152,14 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const audioSinkRef = useRef<GainNode | null>(null);
   const micFlushIntervalRef = useRef<number | null>(null);
+  const micFirstFlushTimeoutRef = useRef<number | null>(null);
   const pcmBufferRef = useRef<Float32Array[]>([]);
   const pcmBufferLengthRef = useRef(0);
+  // Tail of the previously-sent chunk, prepended to the next chunk so
+  // faster-whisper sees ~250ms of context across cut boundaries. Without it,
+  // a word that lands on a flush boundary is split between two chunks and
+  // mis-transcribed in both.
+  const pcmOverlapRef = useRef<Float32Array | null>(null);
   const audioSampleRateRef = useRef(16000);
   const chunkIndexRef = useRef(0);
   const autoStartedSignalRef = useRef<string | null>(null);
@@ -238,6 +245,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const resetPcmBuffer = useCallback(() => {
     pcmBufferRef.current = [];
     pcmBufferLengthRef.current = 0;
+    pcmOverlapRef.current = null;
   }, []);
 
   const stopLocalCapture = useCallback(
@@ -245,6 +253,11 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       if (micFlushIntervalRef.current !== null) {
         window.clearInterval(micFlushIntervalRef.current);
         micFlushIntervalRef.current = null;
+      }
+
+      if (micFirstFlushTimeoutRef.current !== null) {
+        window.clearTimeout(micFirstFlushTimeoutRef.current);
+        micFirstFlushTimeoutRef.current = null;
       }
 
       if (audioProcessorRef.current) {
@@ -293,7 +306,8 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       }
 
       const rawPcm = mergePcmChunks(pcmBufferRef.current, totalLength);
-      resetPcmBuffer();
+      pcmBufferRef.current = [];
+      pcmBufferLengthRef.current = 0;
 
       if (!options.force && rawPcm.length < audioSampleRateRef.current) {
         pcmBufferRef.current = [rawPcm];
@@ -302,11 +316,30 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       }
 
       if (!options.force && calculateRms(rawPcm) < 0.003) {
+        // Drop overlap on silence so the next speech chunk doesn't begin
+        // with stale audio from before the pause.
+        pcmOverlapRef.current = null;
         return false;
       }
 
+      const overlap = pcmOverlapRef.current;
+      let payloadPcm: Float32Array;
+      if (overlap && overlap.length > 0) {
+        payloadPcm = new Float32Array(overlap.length + rawPcm.length);
+        payloadPcm.set(overlap, 0);
+        payloadPcm.set(rawPcm, overlap.length);
+      } else {
+        payloadPcm = rawPcm;
+      }
+
+      const overlapSamples = Math.min(
+        rawPcm.length,
+        Math.round(audioSampleRateRef.current * 0.25),
+      );
+      pcmOverlapRef.current = rawPcm.slice(rawPcm.length - overlapSamples);
+
       const wavBytes = encodeWav(
-        downsamplePcm(rawPcm, audioSampleRateRef.current, 16000),
+        downsamplePcm(payloadPcm, audioSampleRateRef.current, 16000),
         16000,
       );
 
@@ -484,6 +517,10 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       processor.connect(sink);
       sink.connect(audioContext.destination);
 
+      micFirstFlushTimeoutRef.current = window.setTimeout(() => {
+        micFirstFlushTimeoutRef.current = null;
+        flushMicrophoneChunk(meetingSession, socket);
+      }, 2000);
       micFlushIntervalRef.current = window.setInterval(() => {
         flushMicrophoneChunk(meetingSession, socket);
       }, 5000);
@@ -790,6 +827,21 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
   const copyMarkdown = async () => {
     await navigator.clipboard.writeText(toMarkdown(notes));
+    setCopied(true);
+    window.setTimeout(() => setCopied(false), 1500);
+  };
+
+  const downloadMarkdown = () => {
+    const filename = `${slugifyForFilename(session?.title ?? pendingTitle ?? "mila-notes")}.md`;
+    const blob = new Blob([toMarkdown(notes)], {
+      type: "text/markdown;charset=utf-8",
+    });
+    triggerBlobDownload(blob, filename);
+  };
+
+  const downloadPdf = () => {
+    const title = session?.title ?? pendingTitle ?? "Mila Notes";
+    openPrintWindow(title, toMarkdown(notes));
   };
 
   useEffect(() => {
@@ -1067,10 +1119,11 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
                 title="Copy meeting notes as Markdown"
               >
                 <Clipboard size={15} />
-                <span>Copy</span>
+                <span>{copied ? "Copied!" : "Copy"}</span>
               </button>
               <button
                 type="button"
+                onClick={downloadMarkdown}
                 className={pillButtonClass}
                 title="Export Markdown"
               >
@@ -1079,6 +1132,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
               </button>
               <button
                 type="button"
+                onClick={downloadPdf}
                 className={pillButtonClass}
                 title="Export PDF"
               >
@@ -1800,6 +1854,68 @@ function toMarkdown(notes: MeetingNotes) {
     notes.decisions.map((item) => `- ${item}`).join("\n") || "- None";
 
   return `# Mila Notes\n\n## Summary\n${notes.summary}\n\n## Key Points\n${keyPoints}\n\n## Action Items\n${actions}\n\n## Decisions\n${decisions}\n`;
+}
+
+function slugifyForFilename(input: string) {
+  const slug = input
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/(^-|-$)+/g, "");
+  return slug || "mila-notes";
+}
+
+function triggerBlobDownload(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  document.body.removeChild(anchor);
+  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+function escapeHtml(text: string) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+function markdownToHtml(markdown: string) {
+  return markdown
+    .split("\n")
+    .map((line) => {
+      if (line.startsWith("# ")) return `<h1>${escapeHtml(line.slice(2))}</h1>`;
+      if (line.startsWith("## ")) return `<h2>${escapeHtml(line.slice(3))}</h2>`;
+      if (line.startsWith("- [ ] "))
+        return `<div class="action">☐ ${escapeHtml(line.slice(6))}</div>`;
+      if (line.startsWith("- ")) return `<li>${escapeHtml(line.slice(2))}</li>`;
+      if (line.trim() === "") return "";
+      return `<p>${escapeHtml(line)}</p>`;
+    })
+    .join("\n");
+}
+
+function openPrintWindow(title: string, markdown: string) {
+  const printWindow = window.open("", "_blank", "width=800,height=900");
+  if (!printWindow) return;
+  const body = markdownToHtml(markdown);
+  printWindow.document.write(`<!doctype html>
+<html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 720px; margin: 40px auto; padding: 0 24px; color: #111; line-height: 1.5; }
+  h1 { font-size: 28px; margin-bottom: 24px; border-bottom: 2px solid #eee; padding-bottom: 12px; }
+  h2 { font-size: 18px; margin-top: 28px; color: #333; }
+  p { margin: 8px 0; }
+  li { margin: 4px 0; }
+  .action { margin: 6px 0; padding-left: 4px; }
+  @media print { body { margin: 20px; max-width: none; } }
+</style></head>
+<body>${body}<script>window.onload=function(){window.print();}</script></body></html>`);
+  printWindow.document.close();
 }
 
 function blobToBase64(blob: Blob) {

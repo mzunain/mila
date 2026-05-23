@@ -1,0 +1,22 @@
+{
+  "name": "mila",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Mila is a multilingual AI meeting notes assistant for live and uploaded conversations.",
+  "scripts": {
+    "dev": "pnpm --filter @mila/shared build && pnpm --parallel --filter @mila/api --filter @mila/web dev",
+    "dev:web": "pnpm --filter @mila/web dev",
+    "dev:api": "pnpm --filter @mila/api dev",
+    "dev:asr": "cd apps/asr-worker && uvicorn main:app --host 0.0.0.0 --port 9000",
+    "build": "pnpm --filter @mila/shared build && pnpm --filter @mila/api build && pnpm --filter @mila/web build",
+    "lint": "pnpm --filter @mila/shared lint && pnpm --filter @mila/api lint && pnpm --filter @mila/web lint",
+    "test": "pnpm --filter @mila/shared test && pnpm --filter @mila/api test",
+    "typecheck": "pnpm --filter @mila/shared build && pnpm --filter @mila/api typecheck && pnpm --filter @mila/web typecheck",
+    "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"
+  },
+  "packageManager": "pnpm@10.33.0",
+  "engines": {
+    "node": ">=20.19.0",
+    "pnpm": ">=10.0.0"
+  }
+}

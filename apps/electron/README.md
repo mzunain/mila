@@ -14,7 +14,7 @@ a system tray, and preferences storage.
 │  ├─ auto-updater (electron-updater)                            │
 │  └─ in prod: spawns bundled Next.js standalone server          │
 │       on a random port → BrowserWindow.loadURL(...)            │
-│     in dev:  loads http://localhost:3000 directly              │
+│     in dev:  loads http://localhost:3000/app directly          │
 └────────────────────────────────────────────────────────────────┘
          │                            ▲
          │ contextBridge              │
@@ -43,8 +43,10 @@ pnpm dev:desktop
 ```
 
 Under the hood that runs `apps/web` (`next dev`) and waits for it to come up
-before launching Electron with `MILA_DEV_URL=http://localhost:3000`. DevTools
-open automatically (detached).
+before launching Electron. The shell loads `http://localhost:3000/app`
+directly — the marketing landing at `/` is web-only and never opens inside
+the desktop window. Override with `MILA_DEV_URL=…` if you need a different
+host. DevTools open automatically (detached).
 
 If you want the API too, start it in a third terminal:
 

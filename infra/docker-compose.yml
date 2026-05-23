@@ -24,6 +24,8 @@ services:
   asr-worker:
     build:
       context: ../apps/asr-worker
+      args:
+        WHISPER_MODEL: ${WHISPER_MODEL:-small}
     ports:
       - "9000:9000"
     environment:

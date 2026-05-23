@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { ThemeController } from "@/components/theme-controller";
+import { UpdateBanner } from "@/components/update-banner";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -31,6 +32,7 @@ export default function RootLayout({
     >
       <body className="min-h-full bg-background text-foreground">
         <ThemeController />
+        <UpdateBanner />
         {children}
       </body>
     </html>

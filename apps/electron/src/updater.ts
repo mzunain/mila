@@ -24,24 +24,7 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
   autoUpdater.on('download-progress', (progress) =>
     broadcast('downloading', progress),
   );
-  autoUpdater.on('update-downloaded', (info) => {
-    broadcast('downloaded', info);
-    const win = getWindow();
-    if (!win) return;
-    void dialog
-      .showMessageBox(win, {
-        type: 'info',
-        buttons: ['Restart now', 'Later'],
-        defaultId: 0,
-        cancelId: 1,
-        title: 'Update ready',
-        message: `Mila ${info.version} is ready to install.`,
-        detail: 'The app will restart to apply the update.',
-      })
-      .then((result) => {
-        if (result.response === 0) autoUpdater.quitAndInstall();
-      });
-  });
+  autoUpdater.on('update-downloaded', (info) => broadcast('downloaded', info));
   autoUpdater.on('error', (err) => {
     broadcast('error', { message: err?.message ?? String(err) });
     console.error('[updater]', err);

@@ -31,6 +31,8 @@ model MeetingSession {
   autoStarted     Boolean   @default(false) @map("auto_started")
   outputLanguage  String    @default("en") @map("output_language")
   externalMeeting Json?     @map("external_meeting")
+  templateId      String?   @map("template_id")
+  shareToken      String?   @unique @map("share_token")
   startedAt       DateTime? @map("started_at") @db.Timestamptz(6)
   endedAt         DateTime? @map("ended_at") @db.Timestamptz(6)
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)

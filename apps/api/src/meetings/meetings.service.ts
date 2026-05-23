@@ -77,6 +77,7 @@ export class MeetingsService {
           externalMeeting: request.externalMeeting
             ? (request.externalMeeting as unknown as Prisma.InputJsonValue)
             : Prisma.JsonNull,
+          templateId: request.templateId ?? null,
           startedAt: now,
         },
       });
@@ -405,6 +406,8 @@ export class MeetingsService {
     autoStarted: boolean;
     outputLanguage: string;
     externalMeeting: Prisma.JsonValue;
+    templateId?: string | null;
+    shareToken?: string | null;
     createdAt: Date;
     startedAt: Date | null;
     endedAt: Date | null;
@@ -420,9 +423,64 @@ export class MeetingsService {
         row.externalMeeting === null
           ? undefined
           : (row.externalMeeting as unknown as ExternalMeetingContext),
+      templateId: row.templateId ?? undefined,
+      shareToken: row.shareToken ?? null,
       createdAt: row.createdAt.toISOString(),
       startedAt: row.startedAt?.toISOString(),
       endedAt: row.endedAt?.toISOString(),
+    };
+  }
+
+  async createShareToken(userId: string, sessionId: string) {
+    const session = await this.prisma.meetingSession.findUnique({
+      where: { id: sessionId },
+      select: { id: true, userId: true, shareToken: true },
+    });
+    if (!session) throw new NotFoundException('Meeting session not found');
+    if (session.userId !== userId) throw new ForbiddenException();
+    if (session.shareToken) return session.shareToken;
+    const token = randomUUID().replace(/-/g, '');
+    await this.prisma.meetingSession.update({
+      where: { id: session.id },
+      data: { shareToken: token },
+    });
+    return token;
+  }
+
+  async revokeShareToken(userId: string, sessionId: string) {
+    const session = await this.prisma.meetingSession.findUnique({
+      where: { id: sessionId },
+      select: { id: true, userId: true, shareToken: true },
+    });
+    if (!session) throw new NotFoundException('Meeting session not found');
+    if (session.userId !== userId) throw new ForbiddenException();
+    if (!session.shareToken) return;
+    await this.prisma.meetingSession.update({
+      where: { id: session.id },
+      data: { shareToken: null },
+    });
+  }
+
+  async getSharedSession(shareToken: string) {
+    const session = await this.prisma.meetingSession.findUnique({
+      where: { shareToken },
+      include: { notes: true },
+    });
+    if (!session) return null;
+    const notes = session.notes
+      ? this.toNotes(session.notes)
+      : createEmptyNotes(this.parseLanguage(session.outputLanguage));
+    return {
+      id: session.id,
+      title: session.title,
+      outputLanguage: this.parseLanguage(session.outputLanguage),
+      createdAt: session.createdAt.toISOString(),
+      notes: {
+        summary: notes.summary,
+        keyPoints: notes.keyPoints,
+        actionItems: notes.actionItems,
+        decisions: notes.decisions,
+      },
     };
   }
 

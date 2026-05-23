@@ -1,14 +1,16 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
   ParseUUIDPipe,
   Post,
   UseGuards,
 } from '@nestjs/common';
-import type { CreateMeetingRequest } from '@mila/shared';
+import type { CreateMeetingRequest, ShareLinkResponse } from '@mila/shared';
 import { MeetingsService } from './meetings.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -30,6 +32,7 @@ export class MeetingsController {
       source: body.source,
       autoStarted: body.autoStarted,
       externalMeeting: body.externalMeeting,
+      templateId: body.templateId,
     });
   }
 
@@ -50,5 +53,27 @@ export class MeetingsController {
     }
 
     return session;
+  }
+
+  @Post(':id/share')
+  async share(
+    @CurrentUser() user: PublicUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<ShareLinkResponse> {
+    const shareToken = await this.meetingsService.createShareToken(user.id, id);
+    return {
+      sessionId: id,
+      shareToken,
+      url: `/share/${shareToken}`,
+    };
+  }
+
+  @Delete(':id/share')
+  @HttpCode(204)
+  async revokeShare(
+    @CurrentUser() user: PublicUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ) {
+    await this.meetingsService.revokeShareToken(user.id, id);
   }
 }

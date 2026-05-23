@@ -2,6 +2,7 @@ import { Module } from '@nestjs/common';
 import { MeetingsController } from './meetings.controller';
 import { MeetingsGateway } from './meetings.gateway';
 import { MeetingsService } from './meetings.service';
+import { ShareController } from './share.controller';
 import { ASR_PROVIDER } from './providers/asr-provider.token';
 import { HttpAsrProvider } from './providers/http-asr.provider';
 import { MockAsrProvider } from './providers/mock-asr.provider';
@@ -23,7 +24,7 @@ const asrProviderFactory = {
 };
 
 @Module({
-  controllers: [MeetingsController],
+  controllers: [MeetingsController, ShareController],
   providers: [
     MeetingsService,
     MeetingsGateway,

@@ -19,6 +19,7 @@ import {
 import {
   Clipboard,
   Captions,
+  Command,
   FileAudio,
   FileDown,
   Languages,
@@ -29,6 +30,7 @@ import {
   Radio,
   Search,
   ShieldAlert,
+  Sparkles,
   Square,
   ToggleLeft,
   ToggleRight,
@@ -36,6 +38,14 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLogo } from "./brand-logo";
+import { AccountCard } from "./auth/account-card";
+import { CommandPalette } from "./command-palette";
+import { WorkspaceNav } from "./workspace-nav";
+import {
+  resolveApiUrl,
+  resolveWsUrl,
+  usePreferences,
+} from "@/lib/preferences";
 
 type TranscriptMode = "original" | "translated";
 type SessionStatus =
@@ -83,18 +93,33 @@ interface MeetingSessionDetail {
   notes: MeetingNotes;
 }
 
-const apiHttpUrl = "";
-const apiWsUrl =
-  process.env.NEXT_PUBLIC_API_WS_URL ?? "ws://localhost:4000/meetings/live";
+interface WorkspaceUser {
+  id: string;
+  email: string;
+  name: string | null;
+}
 
-export function MeetingWorkspace() {
+interface MeetingWorkspaceProps {
+  token: string;
+  user: WorkspaceUser;
+}
+
+export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
+  const { preferences } = usePreferences();
+  const apiHttpUrl = useMemo(() => resolveApiUrl(preferences), [preferences]);
+  const apiWsBase = useMemo(() => resolveWsUrl(preferences), [preferences]);
+  const apiWsUrl = useMemo(() => {
+    const separator = apiWsBase.includes("?") ? "&" : "?";
+    return `${apiWsBase}${separator}token=${encodeURIComponent(token)}`;
+  }, [token, apiWsBase]);
   const [session, setSession] = useState<MeetingSession | null>(null);
   const [segments, setSegments] = useState<TranscriptSegment[]>([]);
   const [notes, setNotes] = useState<MeetingNotes>(() =>
     createEmptyNotes("en"),
   );
-  const [outputLanguage, setOutputLanguage] =
-    useState<SupportedLanguageCode>("en");
+  const [outputLanguage, setOutputLanguage] = useState<SupportedLanguageCode>(
+    () => normalizeLanguage(preferences.outputLanguage),
+  );
   const [mode, setMode] = useState<TranscriptMode>("translated");
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [autoStartEnabled, setAutoStartEnabled] = useState(true);
@@ -112,6 +137,9 @@ export function MeetingWorkspace() {
     useState<MicPermissionState>("unknown");
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [commandOpen, setCommandOpen] = useState(false);
+  const openCommandPalette = useCallback(() => setCommandOpen(true), []);
+  const closeCommandPalette = useCallback(() => setCommandOpen(false), []);
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -200,7 +228,7 @@ export function MeetingWorkspace() {
           setStatus((current) => (current === "recording" ? "idle" : current));
         };
       }),
-    [outputLanguage],
+    [outputLanguage, apiWsUrl],
   );
 
   const resetPcmBuffer = useCallback(() => {
@@ -294,11 +322,20 @@ export function MeetingWorkspace() {
     [resetPcmBuffer],
   );
 
+  const buildAuthHeaders = useCallback(
+    (extras: Record<string, string> = {}) => {
+      const headers: Record<string, string> = { ...extras };
+      if (apiHttpUrl) headers["authorization"] = `Bearer ${token}`;
+      return headers;
+    },
+    [apiHttpUrl, token],
+  );
+
   const createSession = useCallback(
     async (request: Partial<CreateMeetingRequest> = {}) => {
       const response = await fetch(`${apiHttpUrl}/api/sessions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: buildAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
           title: request.title ?? "Live multilingual meeting",
           outputLanguage,
@@ -314,7 +351,7 @@ export function MeetingWorkspace() {
 
       return (await response.json()) as CreateMeetingResponse;
     },
-    [outputLanguage],
+    [apiHttpUrl, buildAuthHeaders, outputLanguage],
   );
 
   const openLiveSession = useCallback(
@@ -357,6 +394,7 @@ export function MeetingWorkspace() {
 
       const response = await fetch(`${apiHttpUrl}/api/sessions/${sessionId}`, {
         cache: "no-store",
+        headers: buildAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -374,7 +412,7 @@ export function MeetingWorkspace() {
 
       return detail;
     },
-    [connectSocket, stopLocalCapture],
+    [apiHttpUrl, buildAuthHeaders, connectSocket, stopLocalCapture],
   );
 
   const sendMockChunk = useCallback(
@@ -665,8 +703,9 @@ export function MeetingWorkspace() {
 
     void (async () => {
       try {
-        const response = await fetch("/api/capabilities", {
+        const response = await fetch(`${apiHttpUrl}/api/capabilities`, {
           cache: "no-store",
+          headers: buildAuthHeaders(),
         });
 
         if (!response.ok) {
@@ -686,7 +725,7 @@ export function MeetingWorkspace() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [apiHttpUrl, buildAuthHeaders]);
 
   useEffect(() => {
     let cancelled = false;
@@ -748,12 +787,27 @@ export function MeetingWorkspace() {
     await navigator.clipboard.writeText(toMarkdown(notes));
   };
 
+  useEffect(() => {
+    const handler = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault();
+        setCommandOpen((current) => !current);
+      } else if (event.key === "Escape") {
+        setCommandOpen(false);
+      }
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, []);
+
   return (
     <main className="min-h-screen bg-[#0e1116] text-slate-100">
       <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[280px_1fr]">
         <aside className="border-b border-white/10 bg-[#101821] px-5 py-5 lg:border-b-0 lg:border-r">
           <BrandLogo />
-          <div className="mt-8 space-y-5">
+          <AccountCard user={user} />
+          <WorkspaceNav className="mt-5" />
+          <div className="mt-6 space-y-5">
             <div>
               <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                 Output
@@ -968,36 +1022,48 @@ export function MeetingWorkspace() {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex h-10 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3">
+              <div className="flex h-10 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 focus-within:border-emerald-400/60">
                 <Search size={16} className="text-slate-500" />
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
-                  placeholder="Search"
-                  className="w-36 bg-transparent text-sm text-white outline-none placeholder:text-slate-500"
+                  placeholder="Search transcript"
+                  className="w-40 bg-transparent text-sm text-white outline-none placeholder:text-slate-500"
                 />
               </div>
               <button
                 type="button"
-                onClick={copyMarkdown}
-                className={iconButtonClass}
-                title="Copy Markdown"
+                onClick={openCommandPalette}
+                className="hidden h-10 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-slate-400 transition hover:bg-white/[0.07] hover:text-white md:inline-flex"
+                title="Command palette"
               >
-                <Clipboard size={17} />
+                <Command size={13} />
+                <span>K</span>
               </button>
               <button
                 type="button"
-                className={iconButtonClass}
+                onClick={copyMarkdown}
+                className={pillButtonClass}
+                title="Copy meeting notes as Markdown"
+              >
+                <Clipboard size={15} />
+                <span>Copy</span>
+              </button>
+              <button
+                type="button"
+                className={pillButtonClass}
                 title="Export Markdown"
               >
-                <FileAudio size={17} />
+                <FileAudio size={15} />
+                <span>Markdown</span>
               </button>
               <button
                 type="button"
-                className={iconButtonClass}
+                className={pillButtonClass}
                 title="Export PDF"
               >
-                <FileDown size={17} />
+                <FileDown size={15} />
+                <span>PDF</span>
               </button>
             </div>
           </header>
@@ -1009,11 +1075,20 @@ export function MeetingWorkspace() {
           )}
 
           <div className="grid flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
-            <TranscriptPanel segments={filteredSegments} mode={mode} />
+            <TranscriptPanel
+              segments={filteredSegments}
+              mode={mode}
+              isLive={status === "recording" || status === "connecting"}
+            />
             <NotesPanel notes={notes} />
           </div>
         </section>
       </div>
+      <CommandPalette
+        open={commandOpen}
+        onOpenChange={(next) => setCommandOpen(next)}
+        onClose={closeCommandPalette}
+      />
     </main>
   );
 }
@@ -1060,23 +1135,49 @@ function CaptureDiagnosticsCard({
 function TranscriptPanel({
   segments,
   mode,
+  isLive,
 }: {
   segments: TranscriptSegment[];
   mode: TranscriptMode;
+  isLive: boolean;
 }) {
   return (
     <section className="min-h-[520px] overflow-y-auto border-b border-white/10 p-5 xl:border-b-0 xl:border-r">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-500">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
           Live transcript
         </h2>
-        <Pause size={16} className="text-slate-500" />
+        <span className="inline-flex items-center gap-2 text-xs text-slate-500">
+          {isLive ? (
+            <>
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-300" />
+              </span>
+              Listening
+            </>
+          ) : (
+            <>
+              <Pause size={13} />
+              Idle
+            </>
+          )}
+        </span>
       </div>
 
       <div className="space-y-3">
         {segments.length === 0 && (
-          <div className="rounded-md border border-dashed border-white/10 bg-white/[0.02] p-6 text-sm text-slate-500">
-            No transcript segments yet.
+          <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-white/10 bg-white/[0.02] px-6 py-12 text-center">
+            <div className="grid h-10 w-10 place-items-center rounded-full bg-emerald-400/10 text-emerald-300">
+              <Sparkles size={18} />
+            </div>
+            <p className="text-sm font-medium text-slate-200">
+              Listening for the first useful moment.
+            </p>
+            <p className="max-w-xs text-xs leading-5 text-slate-500">
+              Start the mic, join an auto-detected meeting, or simulate a chunk
+              to see Mila line up your transcript here.
+            </p>
           </div>
         )}
 
@@ -1113,26 +1214,52 @@ function TranscriptPanel({
 }
 
 function NotesPanel({ notes }: { notes: MeetingNotes }) {
+  const hasContent =
+    Boolean(notes.summary?.trim()) ||
+    notes.keyPoints.length > 0 ||
+    notes.actionItems.length > 0 ||
+    notes.decisions.length > 0;
+
   return (
     <section className="overflow-y-auto bg-[#0b0f14] p-5">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-sm font-semibold uppercase tracking-[0.14em] text-slate-500">
+        <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
           Notes
         </h2>
         <span
-          className="font-mono text-xs text-slate-600"
+          className="font-mono text-[11px] text-slate-600"
           suppressHydrationWarning
+          title="Last updated"
         >
           {new Date(notes.updatedAt).toLocaleTimeString()}
         </span>
       </div>
 
+      {!hasContent && (
+        <div className="mb-4 rounded-lg border border-dashed border-white/10 bg-white/[0.02] px-5 py-8 text-center">
+          <p className="text-sm font-medium text-slate-200">
+            Notes appear as the conversation unfolds.
+          </p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">
+            Mila summarises the meeting, pulls out key points, decisions, and
+            action items in your selected output language.
+          </p>
+        </div>
+      )}
+
       <div className="space-y-4">
         <NoteBlock title="Summary">
-          <p className="text-sm leading-6 text-slate-300">{notes.summary}</p>
+          {notes.summary?.trim() ? (
+            <p className="text-sm leading-6 text-slate-300">{notes.summary}</p>
+          ) : (
+            <EmptyHint text="A short paragraph capturing the meeting will land here." />
+          )}
         </NoteBlock>
         <NoteBlock title="Key points">
-          <BulletList items={notes.keyPoints} empty="No key points yet." />
+          <BulletList
+            items={notes.keyPoints}
+            empty="Highlights from the conversation will be pinned here."
+          />
         </NoteBlock>
         <NoteBlock title="Action items">
           {notes.actionItems.length ? (
@@ -1148,14 +1275,23 @@ function NotesPanel({ notes }: { notes: MeetingNotes }) {
               ))}
             </ul>
           ) : (
-            <p className="text-sm text-slate-500">No action items yet.</p>
+            <EmptyHint text="Tasks with owners will be detected automatically." />
           )}
         </NoteBlock>
         <NoteBlock title="Decisions">
-          <BulletList items={notes.decisions} empty="No decisions yet." />
+          <BulletList
+            items={notes.decisions}
+            empty="Agreements made on the call will be listed here."
+          />
         </NoteBlock>
       </div>
     </section>
+  );
+}
+
+function EmptyHint({ text }: { text: string }) {
+  return (
+    <p className="text-xs leading-5 text-slate-500">{text}</p>
   );
 }
 
@@ -1176,7 +1312,7 @@ function NoteBlock({
 
 function BulletList({ items, empty }: { items: string[]; empty: string }) {
   if (!items.length) {
-    return <p className="text-sm text-slate-500">{empty}</p>;
+    return <EmptyHint text={empty} />;
   }
 
   return (
@@ -1189,6 +1325,20 @@ function BulletList({ items, empty }: { items: string[]; empty: string }) {
       ))}
     </ul>
   );
+}
+
+function normalizeLanguage(value: string): SupportedLanguageCode {
+  const allowed: SupportedLanguageCode[] = [
+    "en",
+    "ur",
+    "hi",
+    "fi",
+    "mixed",
+    "unknown",
+  ];
+  return (allowed as string[]).includes(value)
+    ? (value as SupportedLanguageCode)
+    : "en";
 }
 
 function formatTime(milliseconds: number) {
@@ -1653,5 +1803,5 @@ const segmentClass =
   "rounded px-3 py-1.5 text-sm font-medium text-slate-500 transition";
 const activeSegmentClass =
   "rounded bg-white/10 px-3 py-1.5 text-sm font-medium text-white shadow-sm";
-const iconButtonClass =
-  "grid h-10 w-10 place-items-center rounded-md border border-white/10 bg-white/[0.03] text-slate-300 transition hover:bg-white/[0.07] hover:text-white";
+const pillButtonClass =
+  "inline-flex h-10 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 text-sm font-medium text-slate-200 transition hover:bg-white/[0.07] hover:text-white";

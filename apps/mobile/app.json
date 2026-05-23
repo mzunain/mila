@@ -1,0 +1,61 @@
+{
+  "expo": {
+    "name": "Mila",
+    "slug": "mila",
+    "version": "0.1.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "mila",
+    "userInterfaceStyle": "dark",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#0a0d12"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "app.mila.ios",
+      "infoPlist": {
+        "NSMicrophoneUsageDescription": "Mila needs your microphone to capture meeting audio for transcription.",
+        "NSSpeechRecognitionUsageDescription": "Mila uses speech recognition to transcribe what's said in your meetings.",
+        "UIBackgroundModes": ["audio"]
+      }
+    },
+    "android": {
+      "package": "app.mila.android",
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#0a0d12"
+      },
+      "permissions": [
+        "RECORD_AUDIO",
+        "MODIFY_AUDIO_SETTINGS",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_MICROPHONE"
+      ]
+    },
+    "web": {
+      "bundler": "metro",
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Mila needs your microphone to capture meeting audio."
+        }
+      ]
+    ],
+    "experiments": {
+      "typedRoutes": true
+    },
+    "extra": {
+      "eas": {
+        "projectId": "REPLACE_AFTER_EAS_INIT"
+      },
+      "apiBaseUrl": "https://mila-api.fly.dev"
+    }
+  }
+}

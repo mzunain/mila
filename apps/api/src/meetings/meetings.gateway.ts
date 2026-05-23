@@ -1,32 +1,92 @@
 import { Logger } from '@nestjs/common';
 import { WebSocketGateway } from '@nestjs/websockets';
+import { JwtService } from '@nestjs/jwt';
 import type { ClientMeetingEvent, ServerMeetingEvent } from '@mila/shared';
 import { RawData, WebSocket } from 'ws';
 import { MeetingsService } from './meetings.service';
+import { AuthService } from '../auth/auth.service';
+import type { JwtPayload } from '../auth/jwt.strategy';
+
+type IncomingRequest = {
+  url?: string;
+  headers?: Record<string, string | string[] | undefined>;
+};
+
+type AuthedSocket = WebSocket & { __userId?: string };
 
 @WebSocketGateway({ path: '/meetings/live' })
 export class MeetingsGateway {
   private readonly logger = new Logger(MeetingsGateway.name);
-  private readonly clientsBySession = new Map<string, Set<WebSocket>>();
-  private readonly sessionsByClient = new Map<WebSocket, Set<string>>();
+  private readonly clientsBySession = new Map<string, Set<AuthedSocket>>();
+  private readonly sessionsByClient = new Map<AuthedSocket, Set<string>>();
 
-  constructor(private readonly meetingsService: MeetingsService) {}
+  constructor(
+    private readonly meetingsService: MeetingsService,
+    private readonly jwt: JwtService,
+    private readonly auth: AuthService,
+  ) {}
 
-  handleConnection(client: WebSocket) {
+  async handleConnection(client: AuthedSocket, request?: IncomingRequest) {
+    const token = extractToken(request);
+    if (!token) {
+      this.rejectAndClose(client, 'UNAUTHENTICATED', 'Missing auth token.');
+      return;
+    }
+
+    // Attach listeners synchronously and buffer frames — clients may send
+    // their first event on 'open', before the awaited JWT verify and DB
+    // lookup below complete. ws does not queue messages without a listener.
+    const pending: RawData[] = [];
+    let ready = false;
     client.on('message', (payload: RawData) => {
+      if (!ready) {
+        pending.push(payload);
+        return;
+      }
       void this.handleMessage(client, decodePayload(payload));
     });
     client.on('close', () => {
       this.removeClient(client);
     });
+
+    try {
+      const payload = await this.jwt.verifyAsync<JwtPayload>(token, {
+        secret:
+          process.env.JWT_SECRET ?? 'mila-dev-secret-do-not-use-in-prod',
+      });
+      const user = await this.auth.findById(payload.sub);
+      if (!user) {
+        this.rejectAndClose(client, 'UNAUTHENTICATED', 'Account not found.');
+        return;
+      }
+      client.__userId = user.id;
+    } catch {
+      this.rejectAndClose(client, 'UNAUTHENTICATED', 'Invalid auth token.');
+      return;
+    }
+
+    ready = true;
+    for (const queued of pending) {
+      void this.handleMessage(client, decodePayload(queued));
+    }
+    pending.length = 0;
   }
 
-  private async handleMessage(client: WebSocket, rawPayload: string) {
+  private async handleMessage(client: AuthedSocket, rawPayload: string) {
+    const userId = client.__userId;
+    if (!userId) {
+      this.rejectAndClose(client, 'UNAUTHENTICATED', 'Connection not authed.');
+      return;
+    }
+
     try {
       const event = JSON.parse(rawPayload) as ClientMeetingEvent;
 
       if (event.type === 'start') {
-        const detail = this.meetingsService.getSessionDetail(event.sessionId);
+        const detail = await this.meetingsService.getSessionForClient(
+          userId,
+          event.sessionId,
+        );
 
         if (!detail) {
           this.send(client, {
@@ -47,7 +107,10 @@ export class MeetingsGateway {
       }
 
       if (event.type === 'audio-chunk') {
-        const result = await this.meetingsService.ingestAudioChunk(event);
+        const result = await this.meetingsService.ingestAudioChunk(
+          userId,
+          event,
+        );
 
         if (result.segment) {
           this.broadcast(event.sessionId, {
@@ -66,7 +129,10 @@ export class MeetingsGateway {
       }
 
       if (event.type === 'transcript-chunk') {
-        const result = await this.meetingsService.ingestTranscriptChunk(event);
+        const result = await this.meetingsService.ingestTranscriptChunk(
+          userId,
+          event,
+        );
 
         if (result.segment) {
           this.broadcast(event.sessionId, {
@@ -86,6 +152,7 @@ export class MeetingsGateway {
 
       if (event.type === 'stop') {
         const notes = await this.meetingsService.completeSession(
+          userId,
           event.sessionId,
         );
         this.broadcast(event.sessionId, { type: 'notes', notes });
@@ -118,9 +185,9 @@ export class MeetingsGateway {
     }
   }
 
-  private addClientToSession(client: WebSocket, sessionId: string) {
+  private addClientToSession(client: AuthedSocket, sessionId: string) {
     const clients =
-      this.clientsBySession.get(sessionId) ?? new Set<WebSocket>();
+      this.clientsBySession.get(sessionId) ?? new Set<AuthedSocket>();
     clients.add(client);
     this.clientsBySession.set(sessionId, clients);
 
@@ -129,7 +196,7 @@ export class MeetingsGateway {
     this.sessionsByClient.set(client, sessions);
   }
 
-  private removeClient(client: WebSocket) {
+  private removeClient(client: AuthedSocket) {
     const sessions = this.sessionsByClient.get(client);
 
     if (!sessions) {
@@ -147,6 +214,37 @@ export class MeetingsGateway {
 
     this.sessionsByClient.delete(client);
   }
+
+  private rejectAndClose(
+    client: WebSocket,
+    code: 'UNAUTHENTICATED' | 'FORBIDDEN',
+    message: string,
+  ) {
+    this.send(client, { type: 'error', code, message });
+    try {
+      client.close(4401, message);
+    } catch {
+      // ignore: socket may already be closing
+    }
+  }
+}
+
+function extractToken(request?: IncomingRequest): string | null {
+  if (!request) return null;
+  const auth = request.headers?.authorization;
+  if (typeof auth === 'string' && auth.toLowerCase().startsWith('bearer ')) {
+    return auth.slice(7).trim() || null;
+  }
+  if (request.url) {
+    try {
+      const url = new URL(request.url, 'http://localhost');
+      const fromQuery = url.searchParams.get('token');
+      if (fromQuery) return fromQuery;
+    } catch {
+      // ignore
+    }
+  }
+  return null;
 }
 
 function decodePayload(payload: RawData) {

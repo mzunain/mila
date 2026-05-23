@@ -1,15 +1,22 @@
-import { NotFoundException } from '@nestjs/common';
+import { ForbiddenException, NotFoundException } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { MeetingsService } from './meetings.service';
 import { ASR_PROVIDER } from './providers/asr-provider.token';
 import { MockAsrProvider } from './providers/mock-asr.provider';
 import { NotesEngineService } from './notes-engine.service';
+import { PrismaService } from '../prisma/prisma.service';
+import { InMemoryPrisma } from './testing/in-memory-prisma';
+
+const USER_ID = 'user-1';
+const OTHER_USER_ID = 'user-2';
 
 describe('MeetingsService', () => {
   let service: MeetingsService;
+  let prisma: InMemoryPrisma;
 
   beforeEach(async () => {
     process.env.LLM_PROVIDER = 'mock';
+    prisma = new InMemoryPrisma();
     const moduleRef = await Test.createTestingModule({
       providers: [
         MeetingsService,
@@ -19,14 +26,15 @@ describe('MeetingsService', () => {
           useClass: MockAsrProvider,
         },
         NotesEngineService,
+        { provide: PrismaService, useValue: prisma },
       ],
     }).compile();
 
     service = moduleRef.get(MeetingsService);
   });
 
-  it('creates a live multilingual meeting session', () => {
-    const result = service.createSession({
+  it('creates a live multilingual meeting session', async () => {
+    const result = await service.createSession(USER_ID, {
       title: 'Product sync',
       outputLanguage: 'en',
     });
@@ -36,9 +44,9 @@ describe('MeetingsService', () => {
     expect(result.notes.outputLanguage).toBe('en');
   });
 
-  it('stores auto-start meeting context for future calendar and desktop signals', () => {
+  it('stores auto-start meeting context for future calendar and desktop signals', async () => {
     const detectedAt = new Date().toISOString();
-    const result = service.createSession({
+    const result = await service.createSession(USER_ID, {
       title: 'Google Meet: Product sync',
       outputLanguage: 'en',
       source: 'auto-browser',
@@ -58,8 +66,10 @@ describe('MeetingsService', () => {
   });
 
   it('ingests an audio chunk and stores a transcript segment', async () => {
-    const { session } = service.createSession({ outputLanguage: 'en' });
-    const result = await service.ingestAudioChunk({
+    const { session } = await service.createSession(USER_ID, {
+      outputLanguage: 'en',
+    });
+    const result = await service.ingestAudioChunk(USER_ID, {
       type: 'audio-chunk',
       sessionId: session.id,
       chunkId: 'chunk-1',
@@ -73,8 +83,10 @@ describe('MeetingsService', () => {
   });
 
   it('ingests browser caption text without requiring microphone access', async () => {
-    const { session } = service.createSession({ outputLanguage: 'en' });
-    const result = await service.ingestTranscriptChunk({
+    const { session } = await service.createSession(USER_ID, {
+      outputLanguage: 'en',
+    });
+    const result = await service.ingestTranscriptChunk(USER_ID, {
       type: 'transcript-chunk',
       sessionId: session.id,
       chunkId: 'caption-1',
@@ -90,8 +102,10 @@ describe('MeetingsService', () => {
   });
 
   it('does not invent transcript text for real audio when only mock ASR is configured', async () => {
-    const { session } = service.createSession({ outputLanguage: 'en' });
-    const result = await service.ingestAudioChunk({
+    const { session } = await service.createSession(USER_ID, {
+      outputLanguage: 'en',
+    });
+    const result = await service.ingestAudioChunk(USER_ID, {
       type: 'audio-chunk',
       sessionId: session.id,
       chunkId: 'real-audio-1',
@@ -101,11 +115,14 @@ describe('MeetingsService', () => {
     });
 
     expect(result.segment).toBeNull();
-    expect(service.getSessionDetail(session.id)?.segments).toHaveLength(0);
+    const detail = await service.getSessionDetail(USER_ID, session.id);
+    expect(detail?.segments).toHaveLength(0);
   });
 
   it('ignores duplicate chunks by chunk id', async () => {
-    const { session } = service.createSession({ outputLanguage: 'en' });
+    const { session } = await service.createSession(USER_ID, {
+      outputLanguage: 'en',
+    });
     const event = {
       type: 'audio-chunk' as const,
       sessionId: session.id,
@@ -114,22 +131,50 @@ describe('MeetingsService', () => {
       mimeType: 'audio/mock',
     };
 
-    await service.ingestAudioChunk(event);
-    const duplicate = await service.ingestAudioChunk(event);
+    await service.ingestAudioChunk(USER_ID, event);
+    const duplicate = await service.ingestAudioChunk(USER_ID, event);
 
     expect(duplicate.segment).toBeNull();
-    expect(service.getSessionDetail(session.id)?.segments).toHaveLength(1);
+    const detail = await service.getSessionDetail(USER_ID, session.id);
+    expect(detail?.segments).toHaveLength(1);
   });
 
   it('rejects chunks for missing sessions', async () => {
     await expect(
-      service.ingestAudioChunk({
+      service.ingestAudioChunk(USER_ID, {
         type: 'audio-chunk',
-        sessionId: 'missing',
+        sessionId: '00000000-0000-0000-0000-000000000000',
         chunkId: 'chunk-1',
         capturedAt: new Date().toISOString(),
         mimeType: 'audio/webm',
       }),
     ).rejects.toBeInstanceOf(NotFoundException);
+  });
+
+  it('blocks another user from reading or mutating a foreign session', async () => {
+    const { session } = await service.createSession(USER_ID, {
+      outputLanguage: 'en',
+    });
+
+    await expect(
+      service.getSessionDetail(OTHER_USER_ID, session.id),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(
+      service.ingestAudioChunk(OTHER_USER_ID, {
+        type: 'audio-chunk',
+        sessionId: session.id,
+        chunkId: 'chunk-1',
+        capturedAt: new Date().toISOString(),
+        mimeType: 'audio/mock',
+      }),
+    ).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('only lists sessions owned by the calling user', async () => {
+    const mine = await service.createSession(USER_ID, { title: 'Mine' });
+    await service.createSession(OTHER_USER_ID, { title: 'Theirs' });
+
+    const listed = await service.listSessions(USER_ID);
+    expect(listed.map((s) => s.id)).toEqual([mine.session.id]);
   });
 });

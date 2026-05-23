@@ -1,4 +1,9 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  ForbiddenException,
+  Inject,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import {
   createEmptyNotes,
   detectDirection,
@@ -11,145 +16,190 @@ import type {
   MeetingNotes,
   SupportedLanguageCode,
   MeetingSession,
+  MeetingStatus,
   TranscriptSegment,
+  ActionItem,
+  ExternalMeetingContext,
 } from '@mila/shared';
+import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
+import { PrismaService } from '../prisma/prisma.service';
 import { NotesEngineService } from './notes-engine.service';
 import type { AsrProvider } from './providers/asr-provider';
 import { ASR_PROVIDER } from './providers/asr-provider.token';
 
-interface SessionRecord {
-  session: MeetingSession;
-  notes: MeetingNotes;
-  segments: TranscriptSegment[];
-  processedChunkIds: Set<string>;
-}
+const KNOWN_LANGUAGES = new Set<SupportedLanguageCode>([
+  'en',
+  'ur',
+  'hi',
+  'fi',
+  'mixed',
+  'unknown',
+]);
+
+const KNOWN_STATUSES = new Set<MeetingStatus>([
+  'scheduled',
+  'live',
+  'processing',
+  'completed',
+  'failed',
+]);
 
 @Injectable()
 export class MeetingsService {
-  private readonly sessions = new Map<string, SessionRecord>();
+  private readonly processedChunkCache = new Map<string, Set<string>>();
 
   constructor(
     @Inject(ASR_PROVIDER) private readonly asrProvider: AsrProvider,
     private readonly notesEngine: NotesEngineService,
+    private readonly prisma: PrismaService,
   ) {}
 
-  createSession(request: CreateMeetingRequest = {}): CreateMeetingResponse {
+  async createSession(
+    userId: string,
+    request: CreateMeetingRequest = {},
+  ): Promise<CreateMeetingResponse> {
     const outputLanguage = request.outputLanguage ?? 'en';
-    const now = new Date().toISOString();
-    const session: MeetingSession = {
-      id: randomUUID(),
-      title: request.title?.trim() || 'Untitled multilingual meeting',
-      status: 'live',
-      source: request.source ?? 'manual',
-      autoStarted: request.autoStarted ?? false,
-      outputLanguage,
-      externalMeeting: request.externalMeeting,
-      createdAt: now,
-      startedAt: now,
-    };
-    const notes = createEmptyNotes(outputLanguage);
+    const now = new Date();
+    const sessionId = randomUUID();
+    const notesId = randomUUID();
 
-    this.sessions.set(session.id, {
-      session,
-      notes,
-      segments: [],
-      processedChunkIds: new Set(),
+    const created = await this.prisma.$transaction(async (tx) => {
+      const session = await tx.meetingSession.create({
+        data: {
+          id: sessionId,
+          userId,
+          title: request.title?.trim() || 'Untitled multilingual meeting',
+          status: 'live',
+          source: request.source ?? 'manual',
+          autoStarted: request.autoStarted ?? false,
+          outputLanguage,
+          externalMeeting: request.externalMeeting
+            ? (request.externalMeeting as unknown as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
+          startedAt: now,
+        },
+      });
+      const notes = await tx.meetingNotes.create({
+        data: {
+          id: notesId,
+          sessionId: session.id,
+          summary: '',
+          keyPoints: [],
+          actionItems: [],
+          decisions: [],
+          outputLanguage,
+          version: 1,
+        },
+      });
+      return { session, notes };
     });
 
-    return { session, notes };
+    return {
+      session: this.toSession(created.session),
+      notes: this.toNotes(created.notes),
+    };
   }
 
-  listSessions() {
-    return [...this.sessions.values()]
-      .map((record) => record.session)
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  async listSessions(userId: string): Promise<MeetingSession[]> {
+    const rows = await this.prisma.meetingSession.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+    });
+    return rows.map((row) => this.toSession(row));
   }
 
-  getSessionDetail(sessionId: string) {
-    const record = this.sessions.get(sessionId);
+  async getSessionDetail(userId: string, sessionId: string) {
+    const session = await this.prisma.meetingSession.findUnique({
+      where: { id: sessionId },
+      include: {
+        segments: { orderBy: { startMs: 'asc' } },
+        notes: true,
+      },
+    });
+    if (!session) return null;
+    if (session.userId !== userId) throw new ForbiddenException();
 
-    if (!record) {
-      return null;
-    }
+    const notes = session.notes
+      ? this.toNotes(session.notes)
+      : createEmptyNotes(this.parseLanguage(session.outputLanguage));
 
     return {
-      session: record.session,
-      segments: record.segments,
-      notes: record.notes,
+      session: this.toSession(session),
+      segments: session.segments.map((s) => this.toSegment(s)),
+      notes,
     };
   }
 
   async ingestAudioChunk(
+    userId: string,
     event: Extract<ClientMeetingEvent, { type: 'audio-chunk' }>,
   ) {
-    const record = this.sessions.get(event.sessionId);
-
-    if (!record) {
-      throw new NotFoundException('Meeting session not found');
+    const session = await this.loadOwnedSession(userId, event.sessionId);
+    if (await this.alreadyProcessed(session.id, event.chunkId)) {
+      const notes = await this.requireNotes(session.id);
+      return { segment: null, notes };
     }
 
-    if (record.processedChunkIds.has(event.chunkId)) {
-      return { segment: null, notes: record.notes };
-    }
-
-    record.processedChunkIds.add(event.chunkId);
-
+    const segmentIndex = await this.prisma.transcriptSegment.count({
+      where: { sessionId: session.id },
+    });
     const segment = await this.asrProvider.transcribe({
       sessionId: event.sessionId,
       chunkId: event.chunkId,
       mimeType: event.mimeType,
       audioBase64: event.audioBase64,
-      outputLanguage: record.session.outputLanguage,
-      segmentIndex: record.segments.length,
+      outputLanguage: this.parseLanguage(session.outputLanguage),
+      segmentIndex,
     });
 
-    if (segment) {
-      record.segments.push(segment);
-      record.notes = await this.notesEngine.generateIncrementalNotes(
-        record.segments,
-        record.session.outputLanguage,
-      );
+    this.rememberChunk(session.id, event.chunkId);
+
+    if (!segment) {
+      const notes = await this.requireNotes(session.id);
+      return { segment: null, notes };
     }
 
-    return { segment, notes: record.notes };
+    await this.persistSegment(session.id, segment);
+    const notes = await this.regenerateIncrementalNotes(session.id);
+    return { segment, notes };
   }
 
   async ingestTranscriptChunk(
+    userId: string,
     event: Extract<ClientMeetingEvent, { type: 'transcript-chunk' }>,
   ) {
-    const record = this.sessions.get(event.sessionId);
-
-    if (!record) {
-      throw new NotFoundException('Meeting session not found');
-    }
-
-    if (record.processedChunkIds.has(event.chunkId)) {
-      return { segment: null, notes: record.notes };
+    const session = await this.loadOwnedSession(userId, event.sessionId);
+    if (await this.alreadyProcessed(session.id, event.chunkId)) {
+      const notes = await this.requireNotes(session.id);
+      return { segment: null, notes };
     }
 
     const originalText = event.text.trim();
-
     if (!originalText) {
-      return { segment: null, notes: record.notes };
+      const notes = await this.requireNotes(session.id);
+      return { segment: null, notes };
     }
 
-    record.processedChunkIds.add(event.chunkId);
+    this.rememberChunk(session.id, event.chunkId);
 
-    const segmentIndex = record.segments.length;
+    const segmentIndex = await this.prisma.transcriptSegment.count({
+      where: { sessionId: session.id },
+    });
     const detectedLanguage =
-      parseSupportedLanguage(event.detectedLanguage) ??
+      this.parseLanguageOrNull(event.detectedLanguage) ??
       detectLanguage(originalText);
     const startMs = segmentIndex * 4200;
+    const sessionLanguage = this.parseLanguage(session.outputLanguage);
     const segment: TranscriptSegment = {
       id: event.chunkId,
-      sessionId: event.sessionId,
+      sessionId: session.id,
       speakerId: event.speakerId ?? `speaker-${(segmentIndex % 2) + 1}`,
       originalText,
       normalizedText: originalText,
       translatedText: this.translateTranscriptText(
         originalText,
-        record.session.outputLanguage,
+        sessionLanguage,
       ),
       detectedLanguage,
       direction: detectDirection(originalText),
@@ -159,33 +209,157 @@ export class MeetingsService {
       isFinal: event.isFinal ?? true,
     };
 
-    record.segments.push(segment);
-    record.notes = await this.notesEngine.generateIncrementalNotes(
-      record.segments,
-      record.session.outputLanguage,
-    );
-
-    return { segment, notes: record.notes };
+    await this.persistSegment(session.id, segment);
+    const notes = await this.regenerateIncrementalNotes(session.id);
+    return { segment, notes };
   }
 
-  async completeSession(sessionId: string) {
-    const record = this.sessions.get(sessionId);
+  async completeSession(userId: string, sessionId: string) {
+    const session = await this.loadOwnedSession(userId, sessionId);
+    const endedAt = new Date();
 
-    if (!record) {
-      throw new NotFoundException('Meeting session not found');
+    await this.prisma.meetingSession.update({
+      where: { id: session.id },
+      data: { status: 'completed', endedAt },
+    });
+
+    return this.regenerateFinalNotes(session.id);
+  }
+
+  /**
+   * Used by the gateway's `start` event to send the connecting client the
+   * current view without any side effects. Treats forbidden as not-found so
+   * the WS handshake never reveals whether a session id belongs to someone else.
+   */
+  async getSessionForClient(userId: string, sessionId: string) {
+    try {
+      return await this.getSessionDetail(userId, sessionId);
+    } catch (error) {
+      if (error instanceof ForbiddenException) return null;
+      throw error;
     }
+  }
 
-    record.session = {
-      ...record.session,
-      status: 'completed',
-      endedAt: new Date().toISOString(),
-    };
-    record.notes = await this.notesEngine.generateFinalNotes(
-      record.segments,
-      record.session.outputLanguage,
+  private async loadOwnedSession(userId: string, sessionId: string) {
+    const session = await this.prisma.meetingSession.findUnique({
+      where: { id: sessionId },
+      select: {
+        id: true,
+        userId: true,
+        outputLanguage: true,
+        status: true,
+      },
+    });
+    if (!session) throw new NotFoundException('Meeting session not found');
+    if (session.userId !== userId) throw new ForbiddenException();
+    return session;
+  }
+
+  private async persistSegment(sessionId: string, segment: TranscriptSegment) {
+    await this.prisma.transcriptSegment.create({
+      data: {
+        id: segment.id,
+        sessionId,
+        speakerId: segment.speakerId,
+        originalText: segment.originalText,
+        normalizedText: segment.normalizedText,
+        translatedText: segment.translatedText,
+        detectedLanguage: segment.detectedLanguage,
+        direction: segment.direction,
+        confidence: segment.confidence,
+        startMs: segment.startMs,
+        endMs: segment.endMs,
+        isFinal: segment.isFinal,
+      },
+    });
+  }
+
+  private async regenerateIncrementalNotes(
+    sessionId: string,
+  ): Promise<MeetingNotes> {
+    const session = await this.prisma.meetingSession.findUniqueOrThrow({
+      where: { id: sessionId },
+      include: { segments: { orderBy: { startMs: 'asc' } } },
+    });
+    const language = this.parseLanguage(session.outputLanguage);
+    const segments = session.segments.map((s) => this.toSegment(s));
+    const next = await this.notesEngine.generateIncrementalNotes(
+      segments,
+      language,
     );
+    return this.upsertNotes(sessionId, next);
+  }
 
-    return record.notes;
+  private async regenerateFinalNotes(sessionId: string): Promise<MeetingNotes> {
+    const session = await this.prisma.meetingSession.findUniqueOrThrow({
+      where: { id: sessionId },
+      include: { segments: { orderBy: { startMs: 'asc' } } },
+    });
+    const language = this.parseLanguage(session.outputLanguage);
+    const segments = session.segments.map((s) => this.toSegment(s));
+    const next = await this.notesEngine.generateFinalNotes(segments, language);
+    return this.upsertNotes(sessionId, next);
+  }
+
+  private async upsertNotes(
+    sessionId: string,
+    notes: MeetingNotes,
+  ): Promise<MeetingNotes> {
+    const updated = await this.prisma.meetingNotes.upsert({
+      where: { sessionId },
+      update: {
+        summary: notes.summary,
+        keyPoints: notes.keyPoints as Prisma.InputJsonValue,
+        actionItems: notes.actionItems as unknown as Prisma.InputJsonValue,
+        decisions: notes.decisions as Prisma.InputJsonValue,
+        outputLanguage: notes.outputLanguage,
+        version: { increment: 1 },
+      },
+      create: {
+        sessionId,
+        summary: notes.summary,
+        keyPoints: notes.keyPoints as Prisma.InputJsonValue,
+        actionItems: notes.actionItems as unknown as Prisma.InputJsonValue,
+        decisions: notes.decisions as Prisma.InputJsonValue,
+        outputLanguage: notes.outputLanguage,
+      },
+    });
+    return this.toNotes(updated);
+  }
+
+  private async requireNotes(sessionId: string): Promise<MeetingNotes> {
+    const row = await this.prisma.meetingNotes.findUnique({
+      where: { sessionId },
+    });
+    if (row) return this.toNotes(row);
+    const session = await this.prisma.meetingSession.findUniqueOrThrow({
+      where: { id: sessionId },
+      select: { outputLanguage: true },
+    });
+    return createEmptyNotes(this.parseLanguage(session.outputLanguage));
+  }
+
+  private async alreadyProcessed(sessionId: string, chunkId: string) {
+    const cached = this.processedChunkCache.get(sessionId);
+    if (cached?.has(chunkId)) return true;
+    const existing = await this.prisma.transcriptSegment.findUnique({
+      where: { id: chunkId },
+      select: { id: true },
+    });
+    if (existing) {
+      this.rememberChunk(sessionId, chunkId);
+      return true;
+    }
+    return false;
+  }
+
+  private rememberChunk(sessionId: string, chunkId: string) {
+    let set = this.processedChunkCache.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.processedChunkCache.set(sessionId, set);
+    }
+    set.add(chunkId);
   }
 
   private translateTranscriptText(
@@ -199,24 +373,110 @@ export class MeetingsService {
     ) {
       return text;
     }
-
     return `[${outputLanguage}] ${text}`;
   }
-}
 
-function parseSupportedLanguage(
-  value: SupportedLanguageCode | undefined,
-): SupportedLanguageCode | null {
-  if (
-    value === 'en' ||
-    value === 'ur' ||
-    value === 'hi' ||
-    value === 'fi' ||
-    value === 'mixed' ||
-    value === 'unknown'
-  ) {
-    return value;
+  private parseLanguage(value: string): SupportedLanguageCode {
+    return KNOWN_LANGUAGES.has(value as SupportedLanguageCode)
+      ? (value as SupportedLanguageCode)
+      : 'en';
   }
 
-  return null;
+  private parseLanguageOrNull(
+    value: string | undefined,
+  ): SupportedLanguageCode | null {
+    if (!value) return null;
+    return KNOWN_LANGUAGES.has(value as SupportedLanguageCode)
+      ? (value as SupportedLanguageCode)
+      : null;
+  }
+
+  private parseStatus(value: string): MeetingStatus {
+    return KNOWN_STATUSES.has(value as MeetingStatus)
+      ? (value as MeetingStatus)
+      : 'live';
+  }
+
+  private toSession(row: {
+    id: string;
+    title: string;
+    status: string;
+    source: string;
+    autoStarted: boolean;
+    outputLanguage: string;
+    externalMeeting: Prisma.JsonValue;
+    createdAt: Date;
+    startedAt: Date | null;
+    endedAt: Date | null;
+  }): MeetingSession {
+    return {
+      id: row.id,
+      title: row.title,
+      status: this.parseStatus(row.status),
+      source: row.source as MeetingSession['source'],
+      autoStarted: row.autoStarted,
+      outputLanguage: this.parseLanguage(row.outputLanguage),
+      externalMeeting:
+        row.externalMeeting === null
+          ? undefined
+          : (row.externalMeeting as unknown as ExternalMeetingContext),
+      createdAt: row.createdAt.toISOString(),
+      startedAt: row.startedAt?.toISOString(),
+      endedAt: row.endedAt?.toISOString(),
+    };
+  }
+
+  private toSegment(row: {
+    id: string;
+    sessionId: string;
+    speakerId: string | null;
+    originalText: string;
+    normalizedText: string;
+    translatedText: string;
+    detectedLanguage: string;
+    direction: string;
+    confidence: number;
+    startMs: number;
+    endMs: number;
+    isFinal: boolean;
+  }): TranscriptSegment {
+    return {
+      id: row.id,
+      sessionId: row.sessionId,
+      speakerId: row.speakerId ?? undefined,
+      originalText: row.originalText,
+      normalizedText: row.normalizedText,
+      translatedText: row.translatedText,
+      detectedLanguage: this.parseLanguage(row.detectedLanguage),
+      direction: row.direction === 'rtl' ? 'rtl' : 'ltr',
+      confidence: row.confidence,
+      startMs: row.startMs,
+      endMs: row.endMs,
+      isFinal: row.isFinal,
+    };
+  }
+
+  private toNotes(row: {
+    summary: string;
+    keyPoints: Prisma.JsonValue;
+    actionItems: Prisma.JsonValue;
+    decisions: Prisma.JsonValue;
+    outputLanguage: string;
+    updatedAt: Date;
+  }): MeetingNotes {
+    return {
+      summary: row.summary,
+      keyPoints: Array.isArray(row.keyPoints)
+        ? (row.keyPoints as string[])
+        : [],
+      actionItems: Array.isArray(row.actionItems)
+        ? (row.actionItems as unknown as ActionItem[])
+        : [],
+      decisions: Array.isArray(row.decisions)
+        ? (row.decisions as string[])
+        : [],
+      outputLanguage: this.parseLanguage(row.outputLanguage),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+  }
 }

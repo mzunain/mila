@@ -27,6 +27,12 @@ describe('NotesEngineService', () => {
     delete process.env.LLM_MODEL;
     delete process.env.OPENROUTER_API_KEY;
     delete process.env.NVIDIA_NIM_API_KEY;
+    delete process.env.GOOGLE_API_KEY;
+    delete process.env.GEMINI_API_KEY;
+    delete process.env.DEEPSEEK_API_KEY;
+    delete process.env.MOONSHOT_API_KEY;
+    delete process.env.ZAI_API_KEY;
+    delete process.env.XAI_API_KEY;
     delete process.env.LLM_FALLBACK_MODELS;
     delete process.env.LLM_LIVE_NOTES_ENABLED;
     delete process.env.LLM_IMPORT_FREE_CLAUDE_ENV;
@@ -126,6 +132,95 @@ describe('NotesEngineService', () => {
 
     expect(notes.summary).toBe('Fallback model generated the final summary.');
     expect(global.fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('routes a google/ spec to the Gemini OpenAI-compatible endpoint', async () => {
+    process.env.LLM_PROVIDER = 'google';
+    process.env.GOOGLE_API_KEY = 'test-google-key';
+    process.env.LLM_MODEL = 'google/gemini-2.5-flash';
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        choices: [
+          {
+            message: {
+              content: JSON.stringify({
+                summary: 'Gemini summarized the meeting.',
+                keyPoints: ['Meeting tomorrow at 5 PM'],
+                actionItems: [],
+                decisions: [],
+              }),
+            },
+          },
+        ],
+      }),
+    } as Response);
+
+    const service = new NotesEngineService();
+    const notes = await service.generateFinalNotes([baseSegment], 'en');
+
+    expect(notes.summary).toBe('Gemini summarized the meeting.');
+    const fetchMock = global.fetch as jest.Mock;
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/openai/chat/completions',
+    );
+    const requestInit = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(
+      (requestInit.headers as Record<string, string>).authorization,
+    ).toBe('Bearer test-google-key');
+    const requestBody = JSON.parse(requestInit.body as string) as {
+      model: string;
+    };
+    expect(requestBody.model).toBe('gemini-2.5-flash');
+  });
+
+  it('falls back from Google to DeepSeek to xAI as keys/models cascade', async () => {
+    process.env.LLM_PROVIDER = 'google';
+    process.env.GOOGLE_API_KEY = 'test-google-key';
+    process.env.DEEPSEEK_API_KEY = 'test-deepseek-key';
+    process.env.XAI_API_KEY = 'test-xai-key';
+    process.env.LLM_MODEL = 'google/gemini-2.5-flash';
+    process.env.LLM_FALLBACK_MODELS =
+      'deepseek/deepseek-chat,xai/grok-4-fast-non-reasoning';
+    global.fetch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        ok: false,
+        text: async () => 'quota exhausted',
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        text: async () => 'temporary failure',
+      } as Response)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  summary: 'Grok caught the fallback.',
+                  keyPoints: [],
+                  actionItems: [],
+                  decisions: [],
+                }),
+              },
+            },
+          ],
+        }),
+      } as Response);
+
+    const service = new NotesEngineService();
+    const notes = await service.generateFinalNotes([baseSegment], 'en');
+
+    expect(notes.summary).toBe('Grok caught the fallback.');
+    expect((global.fetch as jest.Mock).mock.calls).toHaveLength(3);
+    expect((global.fetch as jest.Mock).mock.calls[1][0]).toBe(
+      'https://api.deepseek.com/v1/chat/completions',
+    );
+    expect((global.fetch as jest.Mock).mock.calls[2][0]).toBe(
+      'https://api.x.ai/v1/chat/completions',
+    );
   });
 
   it('returns heuristic notes when all LLM routes fail', async () => {

@@ -193,7 +193,7 @@ export class MeetingsService {
     const startMs = segmentIndex * 4200;
     const sessionLanguage = this.parseLanguage(session.outputLanguage);
     const segment: TranscriptSegment = {
-      id: event.chunkId,
+      id: randomUUID(),
       sessionId: session.id,
       speakerId: event.speakerId ?? `speaker-${(segmentIndex % 2) + 1}`,
       originalText,
@@ -342,16 +342,7 @@ export class MeetingsService {
 
   private async alreadyProcessed(sessionId: string, chunkId: string) {
     const cached = this.processedChunkCache.get(sessionId);
-    if (cached?.has(chunkId)) return true;
-    const existing = await this.prisma.transcriptSegment.findUnique({
-      where: { id: chunkId },
-      select: { id: true },
-    });
-    if (existing) {
-      this.rememberChunk(sessionId, chunkId);
-      return true;
-    }
-    return false;
+    return cached?.has(chunkId) ?? false;
   }
 
   private rememberChunk(sessionId: string, chunkId: string) {

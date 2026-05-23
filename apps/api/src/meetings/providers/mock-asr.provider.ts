@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { Injectable } from '@nestjs/common';
 import { detectDirection, detectLanguage } from '@mila/shared';
 import type { SupportedLanguageCode, TranscriptSegment } from '@mila/shared';
@@ -46,7 +47,7 @@ export class MockAsrProvider implements AsrProvider {
     const startMs = input.segmentIndex * 4200;
 
     return Promise.resolve({
-      id: input.chunkId,
+      id: randomUUID(),
       sessionId: input.sessionId,
       speakerId: `speaker-${(input.segmentIndex % 2) + 1}`,
       originalText: sample.originalText,

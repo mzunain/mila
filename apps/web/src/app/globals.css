@@ -1,15 +1,47 @@
 @import "tailwindcss";
 
-:root {
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root,
+.dark {
   --background: #0e1116;
   --foreground: #eef4f8;
+  --surface: #121922;
+  --surface-soft: #101821;
+  --border: rgba(255, 255, 255, 0.08);
+  --muted: #94a3b8;
+  --selection-bg: #34d399;
+  --selection-fg: #0e1116;
+}
+
+.light {
+  --background: #f8fafc;
+  --foreground: #0f172a;
+  --surface: #ffffff;
+  --surface-soft: #f1f5f9;
+  --border: rgba(15, 23, 42, 0.08);
+  --muted: #475569;
+  --selection-bg: #10b981;
+  --selection-fg: #f8fafc;
 }
 
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
+  --color-surface: var(--surface);
+  --color-surface-soft: var(--surface-soft);
+  --color-border-token: var(--border);
+  --color-muted: var(--muted);
   --font-sans: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "Geist Mono", "Geist Mono Fallback", ui-monospace, monospace;
+}
+
+html {
+  color-scheme: dark;
+}
+
+html.light {
+  color-scheme: light;
 }
 
 body {
@@ -25,6 +57,6 @@ input {
 }
 
 ::selection {
-  background: #34d399;
-  color: #0e1116;
+  background: var(--selection-bg);
+  color: var(--selection-fg);
 }

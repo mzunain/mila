@@ -1,19 +1,19 @@
 import { NextResponse } from "next/server";
+import { apiFetch } from "@/lib/api-server";
+import { getSession } from "@/lib/session";
 
 export async function GET() {
-  const response = await fetch(`${getApiBaseUrl()}/api/capabilities`, {
-    cache: "no-store",
+  const session = await getSession();
+  const response = await apiFetch("/api/capabilities", {
+    token: session?.token,
   });
   const body = await response.text();
 
   return new NextResponse(body, {
     status: response.status,
     headers: {
-      "content-type": response.headers.get("content-type") ?? "application/json",
+      "content-type":
+        response.headers.get("content-type") ?? "application/json",
     },
   });
-}
-
-function getApiBaseUrl() {
-  return process.env.MILA_API_INTERNAL_URL ?? "http://localhost:4000";
 }

@@ -1,34 +1,45 @@
 import { NextRequest, NextResponse } from "next/server";
+import { apiFetch } from "@/lib/api-server";
+import { getSession } from "@/lib/session";
 
 export async function GET() {
-  return proxyToApi("/api/sessions", { method: "GET" });
+  const session = await getSession();
+  if (!session) return unauthorized();
+
+  const response = await apiFetch("/api/sessions", { token: session.token });
+  return relay(response);
 }
 
 export async function POST(request: NextRequest) {
-  return proxyToApi("/api/sessions", {
+  const session = await getSession();
+  if (!session) return unauthorized();
+
+  const response = await apiFetch("/api/sessions", {
     method: "POST",
+    token: session.token,
     body: await request.text(),
     headers: {
-      "content-type": request.headers.get("content-type") ?? "application/json",
+      "content-type":
+        request.headers.get("content-type") ?? "application/json",
     },
   });
+  return relay(response);
 }
 
-function getApiBaseUrl() {
-  return process.env.MILA_API_INTERNAL_URL ?? "http://localhost:4000";
+function unauthorized() {
+  return NextResponse.json(
+    { message: "Unauthorized" },
+    { status: 401 },
+  );
 }
 
-async function proxyToApi(path: string, init: RequestInit) {
-  const response = await fetch(`${getApiBaseUrl()}${path}`, {
-    ...init,
-    cache: "no-store",
-  });
+async function relay(response: Response) {
   const body = await response.text();
-
   return new NextResponse(body, {
     status: response.status,
     headers: {
-      "content-type": response.headers.get("content-type") ?? "application/json",
+      "content-type":
+        response.headers.get("content-type") ?? "application/json",
     },
   });
 }

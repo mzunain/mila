@@ -10,6 +10,11 @@ services:
     volumes:
       - mila-postgres:/var/lib/postgresql/data
       - ./db/init.sql:/docker-entrypoint-initdb.d/001-init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U mila -d mila"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
   redis:
     image: redis:7-alpine
@@ -22,9 +27,37 @@ services:
     ports:
       - "9000:9000"
     environment:
-      WHISPER_MODEL: small
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
       WHISPER_DEVICE: auto
       WHISPER_COMPUTE_TYPE: auto
+
+  api:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      asr-worker:
+        condition: service_started
+    ports:
+      - "4000:4000"
+    # Load API keys + tunables from the repo-root .env. Anything explicitly set
+    # under `environment:` below overrides values in this file, so the
+    # container's DATABASE_URL / REDIS_URL / ASR_BASE_URL always point at the
+    # compose-internal services, never at whatever the developer uses for host
+    # dev (typically localhost:15432, localhost:16379, 127.0.0.1:9000).
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      NODE_ENV: production
+      API_PORT: 4000
+      DATABASE_URL: postgresql://mila:mila@postgres:5432/mila
+      REDIS_URL: redis://redis:6379
+      ASR_BASE_URL: http://asr-worker:9000
 
 volumes:
   mila-postgres:

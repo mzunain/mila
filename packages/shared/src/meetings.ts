@@ -38,6 +38,8 @@ export interface MeetingSession {
   autoStarted: boolean;
   outputLanguage: SupportedLanguageCode;
   externalMeeting?: ExternalMeetingContext;
+  templateId?: string;
+  shareToken?: string | null;
   createdAt: string;
   startedAt?: string;
   endedAt?: string;
@@ -64,6 +66,7 @@ export interface CreateMeetingRequest {
   source?: MeetingSource;
   autoStarted?: boolean;
   externalMeeting?: ExternalMeetingContext;
+  templateId?: string;
 }
 
 export interface CreateMeetingResponse {

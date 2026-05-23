@@ -40,6 +40,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLogo } from "./brand-logo";
 import { AccountCard } from "./auth/account-card";
 import { CommandPalette } from "./command-palette";
+import { ShareSessionButton } from "./share-session-button";
+import { TemplatePicker } from "./template-picker";
 import { WorkspaceNav } from "./workspace-nav";
 import {
   resolveApiUrl,
@@ -120,6 +122,8 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const [outputLanguage, setOutputLanguage] = useState<SupportedLanguageCode>(
     () => normalizeLanguage(preferences.outputLanguage),
   );
+  const [templateId, setTemplateId] = useState<string>("general");
+  const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const [mode, setMode] = useState<TranscriptMode>("translated");
   const [status, setStatus] = useState<SessionStatus>("idle");
   const [autoStartEnabled, setAutoStartEnabled] = useState(true);
@@ -337,11 +341,12 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
         method: "POST",
         headers: buildAuthHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          title: request.title ?? "Live multilingual meeting",
+          title: request.title ?? pendingTitle ?? "Live multilingual meeting",
           outputLanguage,
           source: request.source ?? "manual",
           autoStarted: request.autoStarted ?? false,
           externalMeeting: request.externalMeeting,
+          templateId: request.templateId ?? templateId,
         }),
       });
 
@@ -351,7 +356,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
       return (await response.json()) as CreateMeetingResponse;
     },
-    [apiHttpUrl, buildAuthHeaders, outputLanguage],
+    [apiHttpUrl, buildAuthHeaders, outputLanguage, pendingTitle, templateId],
   );
 
   const openLiveSession = useCallback(
@@ -808,6 +813,15 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
           <AccountCard user={user} />
           <WorkspaceNav className="mt-5" />
           <div className="mt-6 space-y-5">
+            <TemplatePicker
+              value={templateId}
+              disabled={Boolean(session)}
+              onChange={(nextId, template) => {
+                setTemplateId(nextId);
+                if (!session) setPendingTitle(template.defaultTitle);
+              }}
+            />
+
             <div>
               <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
                 Output
@@ -1017,7 +1031,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
                 )}
               </div>
               <h1 className="mt-2 text-2xl font-semibold tracking-normal text-white">
-                {session?.title ?? "Live multilingual meeting"}
+                {session?.title ?? pendingTitle ?? "Live multilingual meeting"}
               </h1>
             </div>
 
@@ -1040,6 +1054,12 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
                 <Command size={13} />
                 <span>K</span>
               </button>
+              <ShareSessionButton
+                sessionId={session?.id ?? null}
+                initialShareToken={session?.shareToken ?? null}
+                token={token}
+                className={pillButtonClass}
+              />
               <button
                 type="button"
                 onClick={copyMarkdown}

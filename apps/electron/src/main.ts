@@ -1,6 +1,13 @@
 import { app, BrowserWindow, dialog } from 'electron';
 import path from 'node:path';
 import { APP_NAME, APP_PROTOCOL, isDev, DEV_URL } from './config';
+
+// Pin userData to ~/Library/Application Support/Mila (or platform equivalent)
+// BEFORE requestSingleInstanceLock. The package is published as @mila/electron;
+// without this, Electron falls back to the default "Electron" path, which
+// collides with any other Electron dev app on the machine and silently
+// loses the single-instance lock.
+app.setPath('userData', path.join(app.getPath('appData'), APP_NAME));
 import { createMainWindow } from './window';
 import { buildMenu } from './menu';
 import { setupTray } from './tray';
@@ -30,34 +37,51 @@ if (!singleLock) {
 }
 
 let mainWindow: BrowserWindow | null = null;
-const getMainWindow = () => mainWindow;
+const getMainWindow = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
+
+const attachMainWindow = (win: BrowserWindow) => {
+  mainWindow = win;
+  win.on('closed', () => {
+    mainWindow = null;
+  });
+};
+
+const ensureMainWindow = async (): Promise<BrowserWindow> => {
+  const existing = getMainWindow();
+  if (existing) return existing;
+  const url = await resolveLoadUrl();
+  const win = createMainWindow(url);
+  attachMainWindow(win);
+  return win;
+};
 
 app.on('second-instance', (_event, argv) => {
-  if (mainWindow) {
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.show();
-    mainWindow.focus();
+  const win = getMainWindow();
+  if (win) {
+    if (win.isMinimized()) win.restore();
+    win.show();
+    win.focus();
+    const deepLink = argv.find((arg) => arg.startsWith(`${APP_PROTOCOL}://`));
+    if (deepLink) win.webContents.send('mila:deep-link', deepLink);
   }
-  const deepLink = argv.find((arg) => arg.startsWith(`${APP_PROTOCOL}://`));
-  if (deepLink) mainWindow?.webContents.send('mila:deep-link', deepLink);
 });
 
 app.on('open-url', (event, url) => {
   event.preventDefault();
-  if (mainWindow) mainWindow.webContents.send('mila:deep-link', url);
+  const win = getMainWindow();
+  if (win) win.webContents.send('mila:deep-link', url);
 });
 
 app.whenReady().then(async () => {
   registerIpcHandlers(getMainWindow);
   buildMenu({
     onCheckForUpdates: () => checkForUpdatesInteractive(getMainWindow),
-    onPreferences: () => mainWindow?.webContents.send('mila:cmd:preferences'),
+    onPreferences: () => getMainWindow()?.webContents.send('mila:cmd:preferences'),
   });
   setupTray(getMainWindow);
 
   try {
-    const url = await resolveLoadUrl();
-    mainWindow = createMainWindow(url);
+    await ensureMainWindow();
     initAutoUpdater(getMainWindow);
   } catch (err) {
     console.error('[main] fatal startup error', err);
@@ -73,14 +97,12 @@ app.whenReady().then(async () => {
 });
 
 app.on('activate', () => {
-  if (!mainWindow && app.isReady()) {
-    void (async () => {
-      const url = await resolveLoadUrl();
-      mainWindow = createMainWindow(url);
-    })();
-  } else if (mainWindow) {
-    mainWindow.show();
-  }
+  if (!app.isReady()) return;
+  void ensureMainWindow().then((win) => {
+    win.show();
+  }).catch((err) => {
+    console.error('[main] activate failed', err);
+  });
 });
 
 app.on('window-all-closed', () => {

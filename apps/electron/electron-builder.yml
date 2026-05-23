@@ -1,0 +1,121 @@
+appId: app.mila.desktop
+productName: Mila
+copyright: Copyright © 2026 Mila
+artifactName: "${productName}-${version}-${os}-${arch}.${ext}"
+asar: true
+asarUnpack:
+  - "node_modules/electron-updater/**"
+directories:
+  output: out
+  buildResources: build
+files:
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+  - "!**/*.ts"
+extraResources:
+  - from: web
+    to: web
+    filter:
+      - "**/*"
+  - from: assets
+    to: assets
+    filter:
+      - "**/*"
+
+mac:
+  category: public.app-category.productivity
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.plist
+  notarize: false
+  target:
+    - target: dmg
+      arch:
+        - arm64
+        - x64
+    - target: zip
+      arch:
+        - arm64
+        - x64
+  icon: assets/icon.icns
+  extendInfo:
+    NSMicrophoneUsageDescription: Mila needs microphone access to capture live meeting audio for transcription.
+    NSCameraUsageDescription: Mila does not record video, but some browser pages may request the camera.
+    NSAppleEventsUsageDescription: Mila uses AppleEvents to detect meeting apps on this Mac.
+    NSScreenCaptureDescription: Mila may capture system audio from meetings you attend.
+    LSApplicationCategoryType: public.app-category.productivity
+    CFBundleURLTypes:
+      - CFBundleURLSchemes:
+          - mila
+        CFBundleURLName: app.mila.desktop
+
+dmg:
+  title: "Mila ${version}"
+  icon: assets/icon.icns
+  background: build/dmg-background.png
+  window:
+    width: 540
+    height: 380
+  contents:
+    - x: 130
+      y: 200
+      type: file
+    - x: 410
+      y: 200
+      type: link
+      path: /Applications
+
+win:
+  publisherName: Mila
+  icon: assets/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+        - arm64
+    - target: portable
+      arch:
+        - x64
+  signingHashAlgorithms:
+    - sha256
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  allowElevation: true
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  shortcutName: Mila
+  installerIcon: assets/icon.ico
+  uninstallerIcon: assets/icon.ico
+
+linux:
+  category: Office;AudioVideo
+  desktop:
+    Name: Mila
+    Comment: Multilingual AI meeting notes
+    Keywords: meeting;notes;transcription;ai
+    MimeType: x-scheme-handler/mila
+  target:
+    - target: AppImage
+      arch:
+        - x64
+        - arm64
+    - target: deb
+      arch:
+        - x64
+        - arm64
+    - target: rpm
+      arch:
+        - x64
+  icon: assets/icon.png
+  maintainer: Mila <hello@mila.app>
+
+publish:
+  - provider: github
+    owner: mzunain
+    repo: mila
+    releaseType: release

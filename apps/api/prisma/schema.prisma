@@ -1,0 +1,83 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(uuid()) @db.Uuid
+  email        String   @unique
+  name         String?
+  avatarUrl    String?  @map("avatar_url")
+  passwordHash String   @map("password_hash")
+  authProvider String   @default("email") @map("auth_provider")
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  sessions MeetingSession[]
+
+  @@map("users")
+}
+
+model MeetingSession {
+  id              String    @id @default(uuid()) @db.Uuid
+  userId          String    @map("user_id") @db.Uuid
+  title           String
+  status          String
+  source          String    @default("manual")
+  autoStarted     Boolean   @default(false) @map("auto_started")
+  outputLanguage  String    @default("en") @map("output_language")
+  externalMeeting Json?     @map("external_meeting")
+  startedAt       DateTime? @map("started_at") @db.Timestamptz(6)
+  endedAt         DateTime? @map("ended_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  segments TranscriptSegment[]
+  notes    MeetingNotes?
+
+  @@index([userId, createdAt(sort: Desc)], map: "meeting_sessions_user_created_idx")
+  @@map("meeting_sessions")
+}
+
+model TranscriptSegment {
+  id               String   @id @default(uuid()) @db.Uuid
+  sessionId        String   @map("session_id") @db.Uuid
+  speakerId        String?  @map("speaker_id")
+  originalText     String   @map("original_text")
+  normalizedText   String   @map("normalized_text")
+  translatedText   String   @map("translated_text")
+  detectedLanguage String   @map("detected_language")
+  direction        String
+  confidence       Float    @default(0)
+  startMs          Int      @map("start_ms")
+  endMs            Int      @map("end_ms")
+  isFinal          Boolean  @default(false) @map("is_final")
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  session MeetingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId, startMs], map: "transcript_segments_session_time_idx")
+  @@map("transcript_segments")
+}
+
+model MeetingNotes {
+  id             String   @id @default(uuid()) @db.Uuid
+  sessionId      String   @unique @map("session_id") @db.Uuid
+  summary        String   @default("")
+  keyPoints      Json     @default("[]") @map("key_points")
+  actionItems    Json     @default("[]") @map("action_items")
+  decisions      Json     @default("[]") @map("decisions")
+  outputLanguage String   @default("en") @map("output_language")
+  version        Int      @default(1)
+  createdAt      DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  session MeetingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@map("meeting_notes")
+}

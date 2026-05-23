@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # Prisma Client must exist before tsc / jest run against the api package.
+      - name: Generate Prisma Client
+        run: pnpm --filter @mila/api exec prisma generate
+
+      # NOTE: `pnpm lint` is deliberately not run yet — the api package has
+      # ~80 pre-existing eslint errors (mostly @typescript-eslint/require-await
+      # on Prisma mock fixtures). Add it back once those are cleaned up.
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Test
+        run: pnpm test
+
+      - name: Build
+        run: pnpm build

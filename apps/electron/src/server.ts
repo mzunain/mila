@@ -2,7 +2,7 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
-import { WEB_BUNDLE_DIR } from './config';
+import { WEB_BUNDLE_DIR, ENTRY_PATH } from './config';
 
 let serverProcess: ChildProcess | null = null;
 
@@ -77,9 +77,9 @@ export async function startEmbeddedServer(env: Record<string, string>): Promise<
     serverProcess = null;
   });
 
-  const url = `http://${hostname}:${port}`;
-  await waitForUrl(url);
-  return url;
+  const origin = `http://${hostname}:${port}`;
+  await waitForUrl(origin);
+  return `${origin}${ENTRY_PATH}`;
 }
 
 export function stopEmbeddedServer(): void {

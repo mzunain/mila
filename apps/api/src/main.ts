@@ -1,4 +1,5 @@
 import { NestFactory } from '@nestjs/core';
+import { ValidationPipe } from '@nestjs/common';
 import { WsAdapter } from '@nestjs/platform-ws';
 import { AppModule } from './app.module';
 
@@ -28,6 +29,14 @@ async function bootstrap() {
     },
     credentials: true,
   });
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+      transformOptions: { enableImplicitConversion: false },
+    }),
+  );
   app.useWebSocketAdapter(new WsAdapter(app));
   app.setGlobalPrefix('api');
 

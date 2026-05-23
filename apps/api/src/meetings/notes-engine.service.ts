@@ -332,6 +332,46 @@ export class NotesEngineService {
       return this.buildRoute('openrouter', spec.slice('openrouter/'.length));
     }
 
+    if (spec.startsWith('google/')) {
+      return this.buildRoute('google', spec.slice('google/'.length));
+    }
+
+    if (spec.startsWith('gemini/')) {
+      return this.buildRoute('google', spec.slice('gemini/'.length));
+    }
+
+    if (spec.startsWith('deepseek/')) {
+      return this.buildRoute('deepseek', spec.slice('deepseek/'.length));
+    }
+
+    if (spec.startsWith('moonshot/')) {
+      return this.buildRoute('moonshot', spec.slice('moonshot/'.length));
+    }
+
+    if (spec.startsWith('kimi/')) {
+      return this.buildRoute('moonshot', spec.slice('kimi/'.length));
+    }
+
+    if (spec.startsWith('zai/')) {
+      return this.buildRoute('zai', spec.slice('zai/'.length));
+    }
+
+    if (spec.startsWith('glm/')) {
+      return this.buildRoute('zai', spec.slice('glm/'.length));
+    }
+
+    if (spec.startsWith('xai/')) {
+      return this.buildRoute('xai', spec.slice('xai/'.length));
+    }
+
+    if (spec.startsWith('grok/')) {
+      return this.buildRoute('xai', spec.slice('grok/'.length));
+    }
+
+    if (spec.startsWith('opencode/')) {
+      return this.buildRoute('opencode', spec.slice('opencode/'.length));
+    }
+
     if (spec.startsWith('ollama/')) {
       return this.buildRoute('ollama', spec.slice('ollama/'.length));
     }
@@ -389,6 +429,124 @@ export class NotesEngineService {
           'https://openrouter.ai/api/v1',
         apiKey,
         label: `${provider}/${model}`,
+      };
+    }
+
+    if (provider === 'google' || provider === 'gemini') {
+      const apiKey =
+        getConfigValue('GOOGLE_API_KEY', this.freeClaudeEnv) ??
+        getConfigValue('GEMINI_API_KEY', this.freeClaudeEnv);
+
+      if (!apiKey) {
+        return null;
+      }
+
+      return {
+        provider: 'google',
+        model,
+        baseUrl:
+          getConfigValue('GOOGLE_BASE_URL', this.freeClaudeEnv) ??
+          'https://generativelanguage.googleapis.com/v1beta/openai',
+        apiKey,
+        label: `google/${model}`,
+      };
+    }
+
+    if (provider === 'deepseek') {
+      const apiKey = getConfigValue('DEEPSEEK_API_KEY', this.freeClaudeEnv);
+
+      if (!apiKey) {
+        return null;
+      }
+
+      return {
+        provider,
+        model,
+        baseUrl:
+          getConfigValue('DEEPSEEK_BASE_URL', this.freeClaudeEnv) ??
+          'https://api.deepseek.com/v1',
+        apiKey,
+        label: `${provider}/${model}`,
+      };
+    }
+
+    if (provider === 'moonshot' || provider === 'kimi') {
+      const apiKey =
+        getConfigValue('MOONSHOT_API_KEY', this.freeClaudeEnv) ??
+        getConfigValue('MOONSHOT_AI_API_KEY', this.freeClaudeEnv);
+
+      if (!apiKey) {
+        return null;
+      }
+
+      return {
+        provider: 'moonshot',
+        model,
+        baseUrl:
+          getConfigValue('MOONSHOT_BASE_URL', this.freeClaudeEnv) ??
+          'https://api.moonshot.ai/v1',
+        apiKey,
+        label: `moonshot/${model}`,
+      };
+    }
+
+    if (provider === 'zai' || provider === 'glm' || provider === 'z-ai') {
+      const apiKey =
+        getConfigValue('ZAI_API_KEY', this.freeClaudeEnv) ??
+        getConfigValue('Z_AI_API_KEY', this.freeClaudeEnv);
+
+      if (!apiKey) {
+        return null;
+      }
+
+      return {
+        provider: 'zai',
+        model,
+        baseUrl:
+          getConfigValue('ZAI_BASE_URL', this.freeClaudeEnv) ??
+          'https://api.z.ai/api/paas/v4',
+        apiKey,
+        label: `zai/${model}`,
+      };
+    }
+
+    if (provider === 'xai' || provider === 'grok') {
+      const apiKey =
+        getConfigValue('XAI_API_KEY', this.freeClaudeEnv) ??
+        getConfigValue('GROK_API_KEY', this.freeClaudeEnv);
+
+      if (!apiKey) {
+        return null;
+      }
+
+      return {
+        provider: 'xai',
+        model,
+        baseUrl:
+          getConfigValue('XAI_BASE_URL', this.freeClaudeEnv) ??
+          'https://api.x.ai/v1',
+        apiKey,
+        label: `xai/${model}`,
+      };
+    }
+
+    if (provider === 'opencode') {
+      const apiKey =
+        getConfigValue('OPENCODE_API_KEY', this.freeClaudeEnv) ??
+        getConfigValue('OPENCODE_AI_API_KEY', this.freeClaudeEnv);
+
+      if (!apiKey) {
+        return null;
+      }
+
+      return {
+        provider: 'opencode',
+        model,
+        baseUrl:
+          getConfigValue('OPENCODE_BASE_URL', this.freeClaudeEnv) ??
+          'https://opencode.ai/v1',
+        apiKey,
+        label: `opencode/${model}`,
       };
     }
 
@@ -483,13 +641,26 @@ function buildNotesPrompt(input: {
   return [
     `Mode: ${input.mode}`,
     `Output language: ${input.outputLanguage}`,
-    'Create concise meeting notes in this exact JSON shape:',
-    '{"summary":"...","keyPoints":["..."],"actionItems":[{"text":"...","owner":"optional","due":"optional"}],"decisions":["..."]}',
+    'Return ONLY a JSON object with this exact shape (no markdown, no commentary):',
+    '{',
+    '  "summary": string,                       // 1-3 sentences',
+    '  "keyPoints": string[],                   // bullet-sized facts',
+    '  "actionItems": [',
+    '    {',
+    '      "text": string,                      // required, the action',
+    '      "owner": string | null,              // person name if explicitly assigned, else null',
+    '      "due": string | null                 // ISO date or human deadline if explicit, else null',
+    '    }',
+    '  ],',
+    '  "decisions": string[]                    // explicit decisions made',
+    '}',
     'Rules:',
     '- Handle Urdu, Hindi, Finnish, English, and mixed code-switching.',
-    '- If transcript is not in the output language, translate internally before writing notes.',
+    '- If the transcript is not in the output language, translate internally before writing the notes.',
     '- Keep action items concrete and preserve owners/dates when present.',
-    '- Do not include markdown fences, comments, or extra text.',
+    '- Use null (not the string "optional", "TBD", "unknown", or "n/a") when owner or due is not stated.',
+    '- Omit empty arrays only if you have nothing to put in them; never emit placeholder strings.',
+    '- Do not include markdown fences, comments, or any text outside the JSON.',
     '',
     'Transcript:',
     input.transcript,
@@ -514,8 +685,29 @@ function buildHeaders(route: LlmRoute) {
   return headers;
 }
 
+const PLACEHOLDER_TOKENS = new Set([
+  'optional',
+  'tbd',
+  'tba',
+  'n/a',
+  'na',
+  'none',
+  'null',
+  'unknown',
+  'unspecified',
+  'pending',
+  '-',
+  '—',
+  '…',
+  '...',
+]);
+
 function readText(value: unknown) {
-  return typeof value === 'string' && value.trim() ? value.trim() : null;
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  if (PLACEHOLDER_TOKENS.has(trimmed.toLowerCase())) return null;
+  return trimmed;
 }
 
 function readStringList(value: unknown) {

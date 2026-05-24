@@ -2,7 +2,7 @@
 
 import { ShareLinkResponse } from "@mila/shared";
 import { Check, Copy, Link2, Loader2, Share2, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useState } from "react";
 import { resolveApiUrl, usePreferences } from "@/lib/preferences";
 
 interface ShareSessionButtonProps {
@@ -24,13 +24,15 @@ export function ShareSessionButton({
   const [shareToken, setShareToken] = useState<string | null>(
     initialShareToken ?? null,
   );
+  const [lastSessionId, setLastSessionId] = useState<string | null>(sessionId);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  if (sessionId !== lastSessionId) {
+    setLastSessionId(sessionId);
     setShareToken(initialShareToken ?? null);
-  }, [initialShareToken, sessionId]);
+  }
 
   const shareUrl =
     shareToken && typeof window !== "undefined"

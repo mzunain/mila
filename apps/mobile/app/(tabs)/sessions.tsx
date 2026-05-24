@@ -1,7 +1,7 @@
 import type { MeetingSession } from "@mila/shared";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
   FlatList,
@@ -21,7 +21,7 @@ export default function SessionsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = async () => {
+  const load = useCallback(async () => {
     if (!token) return;
     setError(null);
     try {
@@ -34,11 +34,11 @@ export default function SessionsScreen() {
         err instanceof Error ? err.message : "Could not load your sessions.",
       );
     }
-  };
+  }, [token]);
 
   useEffect(() => {
     void load();
-  }, [token]);
+  }, [load]);
 
   const onRefresh = async () => {
     setRefreshing(true);

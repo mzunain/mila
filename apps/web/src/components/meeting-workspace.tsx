@@ -356,7 +356,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
       return true;
     },
-    [resetPcmBuffer],
+    [],
   );
 
   const buildAuthHeaders = useCallback(
@@ -683,7 +683,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     }
 
     if (getUrlSessionId()) {
-      setAutoStartStatus("detected");
+      queueMicrotask(() => setAutoStartStatus("detected"));
       return;
     }
 

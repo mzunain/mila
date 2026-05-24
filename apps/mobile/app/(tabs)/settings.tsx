@@ -1,5 +1,6 @@
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import {
   Alert,
   Linking,
@@ -10,10 +11,18 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { getApiBaseUrl } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 export default function SettingsScreen() {
   const { user, signOut } = useAuth();
+  const [apiUrl, setApiUrl] = useState(() => getApiBaseUrl());
+
+  useFocusEffect(
+    useCallback(() => {
+      setApiUrl(getApiBaseUrl());
+    }, []),
+  );
 
   const handleSignOut = () => {
     Alert.alert("Sign out?", "You'll need to sign in again to access your sessions.", [
@@ -68,8 +77,8 @@ export default function SettingsScreen() {
           <Row
             icon="cloud-outline"
             label="API URL"
-            value="mila-api.fly.dev"
-            onPress={() => {}}
+            value={formatHost(apiUrl)}
+            onPress={() => router.push("/settings/api-url")}
           />
           <Row
             icon="notifications-outline"
@@ -104,6 +113,15 @@ export default function SettingsScreen() {
       </ScrollView>
     </SafeAreaView>
   );
+}
+
+function formatHost(url: string) {
+  try {
+    const parsed = new URL(url);
+    return parsed.port ? `${parsed.hostname}:${parsed.port}` : parsed.hostname;
+  } catch {
+    return url;
+  }
 }
 
 function Section({

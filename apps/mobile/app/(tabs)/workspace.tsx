@@ -1,6 +1,9 @@
+import type { MeetingSession } from "@mila/shared";
 import { Ionicons } from "@expo/vector-icons";
-import { router } from "expo-router";
+import { router, useFocusEffect } from "expo-router";
+import { useCallback, useState } from "react";
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -8,10 +11,35 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/lib/auth-context";
 
 export default function WorkspaceScreen() {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
+  const [todaySessions, setTodaySessions] = useState<MeetingSession[] | null>(
+    null,
+  );
+  const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadToday = useCallback(async () => {
+    if (!token) return;
+    setLoadError(null);
+    try {
+      const response = await apiFetch("/api/sessions", { token });
+      if (!response.ok) throw new Error(`${response.status}`);
+      const all = (await response.json()) as MeetingSession[];
+      setTodaySessions(all.filter(isFromToday));
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : "load failed");
+      setTodaySessions([]);
+    }
+  }, [token]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadToday();
+    }, [loadToday]),
+  );
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
@@ -60,12 +88,51 @@ export default function WorkspaceScreen() {
 
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Today</Text>
-          <View style={styles.emptyState}>
-            <Ionicons name="sparkles-outline" size={20} color="#6ee7b7" />
-            <Text style={styles.emptyText}>
-              No meetings yet today. Start one above when your call begins.
-            </Text>
-          </View>
+          {todaySessions === null ? (
+            <View style={styles.loadingCard}>
+              <ActivityIndicator color="#6ee7b7" />
+            </View>
+          ) : todaySessions.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name="sparkles-outline" size={20} color="#6ee7b7" />
+              <Text style={styles.emptyText}>
+                {loadError
+                  ? `Couldn't load today's meetings (${loadError}).`
+                  : "No meetings yet today. Start one above when your call begins."}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.todayList}>
+              {todaySessions.map((session) => (
+                <Pressable
+                  key={session.id}
+                  onPress={() => router.push(`/session/${session.id}`)}
+                  style={({ pressed }) => [
+                    styles.todayRow,
+                    pressed && { backgroundColor: "#121822" },
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.statusDot,
+                      { backgroundColor: statusColor(session.status) },
+                    ]}
+                  />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.todayTitle} numberOfLines={1}>
+                      {session.title || "Untitled session"}
+                    </Text>
+                    <Text style={styles.todayMeta} numberOfLines={1}>
+                      {formatTime(new Date(session.createdAt))}
+                      {"  ·  "}
+                      {session.outputLanguage.toUpperCase()}
+                    </Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color="#475569" />
+                </Pressable>
+              ))}
+            </View>
+          )}
         </View>
 
         <View style={styles.section}>
@@ -104,6 +171,30 @@ function QuickAction({
       <Text style={styles.quickActionLabel}>{label}</Text>
     </Pressable>
   );
+}
+
+function isFromToday(session: MeetingSession) {
+  const created = new Date(session.createdAt);
+  const now = new Date();
+  return (
+    created.getFullYear() === now.getFullYear() &&
+    created.getMonth() === now.getMonth() &&
+    created.getDate() === now.getDate()
+  );
+}
+
+function statusColor(status: MeetingSession["status"]) {
+  if (status === "live") return "#6ee7b7";
+  if (status === "processing") return "#fcd34d";
+  if (status === "failed") return "#fca5a5";
+  return "#94a3b8";
+}
+
+function formatTime(date: Date) {
+  return date.toLocaleTimeString(undefined, {
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 const styles = StyleSheet.create({
@@ -150,6 +241,14 @@ const styles = StyleSheet.create({
   quickActionLabel: { color: "#cbd5e1", fontSize: 12, fontWeight: "500" },
   section: { gap: 10 },
   sectionTitle: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  loadingCard: {
+    backgroundColor: "rgba(110, 231, 183, 0.06)",
+    borderColor: "rgba(110, 231, 183, 0.2)",
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 16,
+    alignItems: "center",
+  },
   emptyState: {
     backgroundColor: "rgba(110, 231, 183, 0.06)",
     borderColor: "rgba(110, 231, 183, 0.2)",
@@ -161,6 +260,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   emptyText: { color: "#cbd5e1", fontSize: 13, flex: 1, lineHeight: 18 },
+  todayList: { gap: 8 },
+  todayRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: "#0f141b",
+    borderColor: "#1e293b",
+    borderWidth: 1,
+    borderRadius: 12,
+  },
+  statusDot: { height: 8, width: 8, borderRadius: 4 },
+  todayTitle: { color: "#fff", fontSize: 14, fontWeight: "600" },
+  todayMeta: { color: "#94a3b8", fontSize: 12, marginTop: 2 },
   tipCard: {
     backgroundColor: "#0f141b",
     borderColor: "#1e293b",

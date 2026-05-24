@@ -51,8 +51,7 @@ export class MeetingsGateway {
 
     try {
       const payload = await this.jwt.verifyAsync<JwtPayload>(token, {
-        secret:
-          process.env.JWT_SECRET ?? 'mila-dev-secret-do-not-use-in-prod',
+        secret: process.env.JWT_SECRET ?? 'mila-dev-secret-do-not-use-in-prod',
       });
       const user = await this.auth.findById(payload.sub);
       if (!user) {

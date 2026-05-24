@@ -35,7 +35,11 @@ export class ChatService {
       snippet: this.extractSnippet(session.notes?.summary ?? null, question),
     }));
 
-    const content = await this.generateAnswer(question, sessions, request.messages);
+    const content = await this.generateAnswer(
+      question,
+      sessions,
+      request.messages,
+    );
 
     return {
       id: randomUUID(),
@@ -64,7 +68,9 @@ export class ChatService {
     try {
       return await this.askGemini(apiKey, question, sessions, history);
     } catch (err) {
-      this.logger.warn(`Gemini call failed, falling back to stub: ${err instanceof Error ? err.message : err}`);
+      this.logger.warn(
+        `Gemini call failed, falling back to stub: ${err instanceof Error ? err.message : err}`,
+      );
       return this.composeAnswer(question, sessions);
     }
   }
@@ -86,7 +92,9 @@ export class ChatService {
       { role: 'system' as const, content: systemPrompt },
       ...history.slice(-6).map((m) => ({ role: m.role, content: m.content })),
     ];
-    if (!history.some((m) => m.role === 'user' && m.content.trim() === question)) {
+    if (
+      !history.some((m) => m.role === 'user' && m.content.trim() === question)
+    ) {
       messages.push({ role: 'user', content: question });
     }
 
@@ -127,13 +135,17 @@ export class ChatService {
         ];
         if (notes?.summary) parts.push(`Summary: ${notes.summary}`);
         if (notes?.keyPoints?.length)
-          parts.push(`Key points:\n${notes.keyPoints.map((p) => `- ${p}`).join('\n')}`);
+          parts.push(
+            `Key points:\n${notes.keyPoints.map((p) => `- ${p}`).join('\n')}`,
+          );
         if (notes?.actionItems?.length)
           parts.push(
             `Action items:\n${notes.actionItems.map((a) => `- ${a.text}${a.owner ? ` (owner: ${a.owner})` : ''}`).join('\n')}`,
           );
         if (notes?.decisions?.length)
-          parts.push(`Decisions:\n${notes.decisions.map((d) => `- ${d}`).join('\n')}`);
+          parts.push(
+            `Decisions:\n${notes.decisions.map((d) => `- ${d}`).join('\n')}`,
+          );
         return parts.join('\n');
       })
       .join('\n\n');
@@ -174,10 +186,11 @@ export class ChatService {
         ? {
             summary: row.notes.summary,
             keyPoints: (row.notes.keyPoints as string[]) ?? [],
-            actionItems: (row.notes.actionItems as {
-              text: string;
-              owner?: string | null;
-            }[]) ?? [],
+            actionItems:
+              (row.notes.actionItems as {
+                text: string;
+                owner?: string | null;
+              }[]) ?? [],
             decisions: (row.notes.decisions as string[]) ?? [],
           }
         : null,
@@ -200,7 +213,9 @@ export class ChatService {
     if (!question) return this.truncate(summary, 140);
     const sentences = summary.split(/(?<=[.!?])\s+/);
     const match = sentences.find((sentence) =>
-      sentence.toLowerCase().includes(question.toLowerCase().split(' ')[0] ?? ''),
+      sentence
+        .toLowerCase()
+        .includes(question.toLowerCase().split(' ')[0] ?? ''),
     );
     return this.truncate(match ?? summary, 160);
   }

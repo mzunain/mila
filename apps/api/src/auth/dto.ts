@@ -9,7 +9,7 @@ import {
 import { Transform } from 'class-transformer';
 
 export class RegisterDto {
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
   @IsEmail({}, { message: 'Enter a valid email address.' })
@@ -30,7 +30,7 @@ export class RegisterDto {
 }
 
 export class LoginDto {
-  @Transform(({ value }) =>
+  @Transform(({ value }: { value: unknown }) =>
     typeof value === 'string' ? value.trim().toLowerCase() : value,
   )
   @IsEmail()

@@ -20,7 +20,8 @@
     "dist:win": "pnpm prebundle && electron-builder --win",
     "dist:linux": "pnpm prebundle && electron-builder --linux",
     "dist:all": "pnpm prebundle && electron-builder -mwl",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "pnpm build:ts && node --test dist/*.test.js"
   },
   "dependencies": {
     "electron-updater": "^6.3.9"

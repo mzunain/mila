@@ -18,6 +18,7 @@ import {
 import { registerIpcHandlers } from './ipc';
 import { startEmbeddedServer, stopEmbeddedServer } from './server';
 import { getPrefs } from './store';
+import { startMeetingDetector } from './meeting-detector';
 
 app.setName(APP_NAME);
 
@@ -37,6 +38,7 @@ if (!singleLock) {
 }
 
 let mainWindow: BrowserWindow | null = null;
+let stopMeetingDetector: (() => void) | null = null;
 const getMainWindow = () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow : null);
 
 const attachMainWindow = (win: BrowserWindow) => {
@@ -83,6 +85,20 @@ app.whenReady().then(async () => {
   try {
     await ensureMainWindow();
     initAutoUpdater(getMainWindow);
+
+    // Watch for Zoom / Teams / Webex / Google Meet calls and notify the
+    // renderer so it can auto-start a session. The renderer's preload script
+    // converts each IPC event into a postMessage that the existing
+    // MeetingWorkspace auto-start listener consumes — no web client changes
+    // are needed for the producer side.
+    stopMeetingDetector = startMeetingDetector({
+      onDetect: (meeting) => {
+        const win = getMainWindow();
+        if (!win) return;
+        win.webContents.send('mila:auto-start-signal', meeting);
+      },
+      log: (msg) => console.log(msg),
+    });
   } catch (err) {
     console.error('[main] fatal startup error', err);
     await dialog.showMessageBox({
@@ -113,6 +129,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  stopMeetingDetector?.();
+  stopMeetingDetector = null;
   stopEmbeddedServer();
 });
 

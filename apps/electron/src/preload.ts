@@ -47,4 +47,16 @@ const milaBridge = {
 
 contextBridge.exposeInMainWorld('mila', milaBridge);
 
+// Bridge meeting-detector signals from the main process into a window-scoped
+// `message` event. The MeetingWorkspace already listens for postMessage events
+// matching the `mila:meeting-joined` shape via `normalizeAutoStartSignal`, so
+// this single re-broadcast wires Electron-side OS detection into the existing
+// auto-start flow without touching any web code.
+ipcRenderer.on('mila:auto-start-signal', (_event, signal: unknown) => {
+  window.postMessage(
+    { type: 'mila:meeting-joined', payload: signal },
+    window.location.origin,
+  );
+});
+
 export type MilaBridge = typeof milaBridge;

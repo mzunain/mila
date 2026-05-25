@@ -27,9 +27,8 @@ jobs:
       - name: Generate Prisma Client
         run: pnpm --filter @mila/api exec prisma generate
 
-      # NOTE: `pnpm lint` is deliberately not run yet — the api package has
-      # ~80 pre-existing eslint errors (mostly @typescript-eslint/require-await
-      # on Prisma mock fixtures). Add it back once those are cleaned up.
+      - name: Lint
+        run: pnpm lint
 
       - name: Typecheck
         run: pnpm typecheck

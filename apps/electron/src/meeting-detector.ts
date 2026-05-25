@@ -173,9 +173,17 @@ export function startMeetingDetector(options: DetectorOptions): () => void {
       if (!procList) return;
       const detection = probeProcessList(procList);
       const key = meetingKey(detection);
-      if (key && key !== lastKey) {
-        lastKey = key;
-        options.log?.(`[meeting-detector] detected ${key}`);
+      if (key) {
+        // Always emit on every tick where a meeting is detected. The first
+        // tick fires before the renderer's preload has attached its IPC
+        // listener, so if we dedupe at the source the renderer can miss the
+        // signal and never auto-start. Cheap to re-send a small JSON payload
+        // every 3s — the renderer dedupes by meetingKey when deciding
+        // whether to create a session.
+        if (key !== lastKey) {
+          options.log?.(`[meeting-detector] detected ${key}`);
+          lastKey = key;
+        }
         options.onDetect(detection!);
       } else if (!key && lastKey) {
         // The meeting ended — reset so re-joining the same provider re-fires.

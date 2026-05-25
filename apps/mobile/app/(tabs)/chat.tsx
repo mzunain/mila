@@ -1,6 +1,8 @@
+import type { ChatRequest, ChatResponse } from "@mila/shared";
 import { Ionicons } from "@expo/vector-icons";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
+  ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -11,8 +13,10 @@ import {
   View,
 } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { apiFetch } from "@/lib/api";
+import { useAuth } from "@/lib/auth-context";
 
-interface ChatMessage {
+interface UiMessage {
   id: string;
   role: "user" | "assistant";
   text: string;
@@ -26,22 +30,65 @@ const STARTER_PROMPTS = [
 ];
 
 export default function ChatScreen() {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const { token } = useAuth();
+  const [messages, setMessages] = useState<UiMessage[]>([]);
   const [input, setInput] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView | null>(null);
 
-  const handleSend = (text: string) => {
+  const handleSend = async (text: string) => {
     const trimmed = text.trim();
-    if (!trimmed) return;
-    setMessages((prev) => [
-      ...prev,
-      { id: `u-${Date.now()}`, role: "user", text: trimmed },
-      {
-        id: `a-${Date.now()}`,
-        role: "assistant",
-        text: "I&apos;ll have an answer once your account is wired to the live API. For now this is a preview of how the chat will work — pulling context from every meeting on your account.",
-      },
-    ]);
+    if (!trimmed || sending) return;
+
+    const userMessage: UiMessage = {
+      id: `u-${Date.now()}`,
+      role: "user",
+      text: trimmed,
+    };
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages);
     setInput("");
+    setError(null);
+    setSending(true);
+    requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+
+    if (!token) {
+      setError("Please sign in to chat with Mila.");
+      setSending(false);
+      return;
+    }
+
+    try {
+      const payload: ChatRequest = {
+        messages: nextMessages.map((m) => ({ role: m.role, content: m.text })),
+      };
+      const response = await apiFetch("/api/chat", {
+        method: "POST",
+        token,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (!response.ok) throw new Error(`${response.status}`);
+      const data = (await response.json()) as ChatResponse;
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: data.message.id,
+          role: "assistant",
+          text: data.message.content,
+        },
+      ]);
+      requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? `Couldn't reach Mila (${err.message}).`
+          : "Couldn't reach Mila.",
+      );
+    } finally {
+      setSending(false);
+    }
   };
 
   return (
@@ -60,6 +107,7 @@ export default function ChatScreen() {
         keyboardVerticalOffset={Platform.OS === "ios" ? 90 : 0}
       >
         <ScrollView
+          ref={scrollRef}
           style={styles.flex}
           contentContainerStyle={styles.scrollContent}
         >
@@ -107,6 +155,12 @@ export default function ChatScreen() {
               </View>
             ))
           )}
+          {sending ? (
+            <View style={[styles.bubble, styles.bubbleAssistant]}>
+              <ActivityIndicator color="#6ee7b7" size="small" />
+            </View>
+          ) : null}
+          {error ? <Text style={styles.error}>{error}</Text> : null}
         </ScrollView>
 
         <View style={styles.composer}>
@@ -117,14 +171,15 @@ export default function ChatScreen() {
             placeholderTextColor="#475569"
             style={styles.input}
             multiline
-            onSubmitEditing={() => handleSend(input)}
+            editable={!sending}
+            onSubmitEditing={() => void handleSend(input)}
           />
           <Pressable
-            onPress={() => handleSend(input)}
-            disabled={!input.trim()}
+            onPress={() => void handleSend(input)}
+            disabled={!input.trim() || sending}
             style={({ pressed }) => [
               styles.sendButton,
-              (!input.trim() || pressed) && { opacity: 0.6 },
+              (!input.trim() || pressed || sending) && { opacity: 0.6 },
             ]}
           >
             <Ionicons name="arrow-up" size={18} color="#020617" />
@@ -183,6 +238,7 @@ const styles = StyleSheet.create({
   },
   bubbleUserText: { color: "#d1fae5", fontSize: 14 },
   bubbleAssistantText: { color: "#e2e8f0", fontSize: 14, lineHeight: 20 },
+  error: { color: "#fca5a5", fontSize: 12, textAlign: "center", marginTop: 8 },
   composer: {
     flexDirection: "row",
     gap: 8,

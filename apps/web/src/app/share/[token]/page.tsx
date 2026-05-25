@@ -1,4 +1,5 @@
 import { Metadata } from "next";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { PublicSharedSession } from "@mila/shared";
 import { BrandLogo } from "@/components/brand-logo";
@@ -48,12 +49,12 @@ export default async function SharePage({ params }: SharePageProps) {
       <header className="border-b border-white/10 px-6 py-4">
         <div className="mx-auto flex max-w-3xl items-center justify-between">
           <BrandLogo />
-          <a
+          <Link
             href="/"
             className="rounded-md border border-emerald-400/30 bg-emerald-300/10 px-4 py-2 text-xs font-semibold text-emerald-200 transition hover:bg-emerald-300/20"
           >
             Get Mila
-          </a>
+          </Link>
         </div>
       </header>
 
@@ -141,12 +142,12 @@ export default async function SharePage({ params }: SharePageProps) {
           <p className="text-sm text-slate-300">
             Want your meetings summarised like this?
           </p>
-          <a
+          <Link
             href="/"
             className="mt-3 inline-flex items-center gap-2 rounded-md bg-emerald-300 px-4 py-2 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
           >
             Try Mila free
-          </a>
+          </Link>
         </footer>
       </main>
     </div>

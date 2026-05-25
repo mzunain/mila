@@ -137,7 +137,7 @@ export class MeetingsService {
     event: Extract<ClientMeetingEvent, { type: 'audio-chunk' }>,
   ) {
     const session = await this.loadOwnedSession(userId, event.sessionId);
-    if (await this.alreadyProcessed(session.id, event.chunkId)) {
+    if (this.alreadyProcessed(session.id, event.chunkId)) {
       const notes = await this.requireNotes(session.id);
       return { segment: null, notes };
     }
@@ -171,7 +171,7 @@ export class MeetingsService {
     event: Extract<ClientMeetingEvent, { type: 'transcript-chunk' }>,
   ) {
     const session = await this.loadOwnedSession(userId, event.sessionId);
-    if (await this.alreadyProcessed(session.id, event.chunkId)) {
+    if (this.alreadyProcessed(session.id, event.chunkId)) {
       const notes = await this.requireNotes(session.id);
       return { segment: null, notes };
     }
@@ -310,18 +310,18 @@ export class MeetingsService {
       where: { sessionId },
       update: {
         summary: notes.summary,
-        keyPoints: notes.keyPoints as Prisma.InputJsonValue,
+        keyPoints: notes.keyPoints,
         actionItems: notes.actionItems as unknown as Prisma.InputJsonValue,
-        decisions: notes.decisions as Prisma.InputJsonValue,
+        decisions: notes.decisions,
         outputLanguage: notes.outputLanguage,
         version: { increment: 1 },
       },
       create: {
         sessionId,
         summary: notes.summary,
-        keyPoints: notes.keyPoints as Prisma.InputJsonValue,
+        keyPoints: notes.keyPoints,
         actionItems: notes.actionItems as unknown as Prisma.InputJsonValue,
-        decisions: notes.decisions as Prisma.InputJsonValue,
+        decisions: notes.decisions,
         outputLanguage: notes.outputLanguage,
       },
     });
@@ -340,7 +340,7 @@ export class MeetingsService {
     return createEmptyNotes(this.parseLanguage(session.outputLanguage));
   }
 
-  private async alreadyProcessed(sessionId: string, chunkId: string) {
+  private alreadyProcessed(sessionId: string, chunkId: string): boolean {
     const cached = this.processedChunkCache.get(sessionId);
     return cached?.has(chunkId) ?? false;
   }

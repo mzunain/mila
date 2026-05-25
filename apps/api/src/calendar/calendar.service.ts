@@ -93,7 +93,8 @@ export class CalendarService {
     }
 
     return events.sort(
-      (left, right) => new Date(left.start).getTime() - new Date(right.start).getTime(),
+      (left, right) =>
+        new Date(left.start).getTime() - new Date(right.start).getTime(),
     );
   }
 }

@@ -1,7 +1,9 @@
 type Row = Record<string, unknown>;
 
 type Select = Record<string, true | undefined> | undefined;
-type Include = Record<string, true | { orderBy?: unknown } | undefined> | undefined;
+type Include =
+  | Record<string, true | { orderBy?: unknown } | undefined>
+  | undefined;
 
 function applySelect<T extends Row>(row: T | null, select: Select): T | null {
   if (!row || !select) return row;
@@ -25,7 +27,7 @@ class MeetingSessionTable {
   segmentsTable!: TranscriptSegmentTable;
   notesTable!: MeetingNotesTable;
 
-  async create({ data }: { data: Row }) {
+  create({ data }: { data: Row }): Promise<Row> {
     const now = new Date();
     const row: Row = {
       createdAt: now,
@@ -34,23 +36,23 @@ class MeetingSessionTable {
       ...data,
     };
     this.rows.push(row);
-    return { ...row };
+    return Promise.resolve({ ...row });
   }
 
-  async update({ where, data }: { where: { id: string }; data: Row }) {
+  update({ where, data }: { where: { id: string }; data: Row }): Promise<Row> {
     const row = this.rows.find((r) => r.id === where.id);
     if (!row) throw new Error('not found');
     Object.assign(row, data);
-    return { ...row };
+    return Promise.resolve({ ...row });
   }
 
-  async findUnique(args: {
+  findUnique(args: {
     where: { id: string };
     select?: Select;
     include?: Include;
-  }) {
+  }): Promise<Row | null> {
     const row = this.rows.find((r) => r.id === args.where.id) ?? null;
-    if (!row) return null;
+    if (!row) return Promise.resolve(null);
     if (args.include) {
       const out: Row = { ...row };
       if (args.include.segments) {
@@ -64,22 +66,22 @@ class MeetingSessionTable {
           this.notesTable.rows.find((n) => n.sessionId === row.id) ?? null;
         out.notes = notes ? { ...notes } : null;
       }
-      return out;
+      return Promise.resolve(out);
     }
-    return applySelect({ ...row }, args.select);
+    return Promise.resolve(applySelect({ ...row }, args.select));
   }
 
   async findUniqueOrThrow(args: {
     where: { id: string };
     select?: Select;
     include?: Include;
-  }) {
+  }): Promise<Row> {
     const row = await this.findUnique(args);
     if (!row) throw new Error('not found');
     return row;
   }
 
-  async findMany(args?: { where?: Row; orderBy?: Row }) {
+  findMany(args?: { where?: Row; orderBy?: Row }): Promise<Row[]> {
     let rows = [...this.rows];
     if (args?.where) {
       rows = rows.filter((r) => matchWhere(r, args.where!));
@@ -87,34 +89,39 @@ class MeetingSessionTable {
     if (args?.orderBy) {
       const [key, dir] = Object.entries(args.orderBy)[0];
       rows.sort((a, b) => {
-        const av = a[key] instanceof Date ? (a[key] as Date).getTime() : 0;
-        const bv = b[key] instanceof Date ? (b[key] as Date).getTime() : 0;
+        const av = a[key] instanceof Date ? a[key].getTime() : 0;
+        const bv = b[key] instanceof Date ? b[key].getTime() : 0;
         return dir === 'asc' ? av - bv : bv - av;
       });
     }
-    return rows.map((r) => ({ ...r }));
+    return Promise.resolve(rows.map((r) => ({ ...r })));
   }
 }
 
 class TranscriptSegmentTable {
   rows: Row[] = [];
 
-  async create({ data }: { data: Row }) {
+  create({ data }: { data: Row }): Promise<Row> {
     this.rows.push({ ...data });
-    return { ...data };
+    return Promise.resolve({ ...data });
   }
 
-  async findUnique(args: { where: { id: string }; select?: Select }) {
+  findUnique(args: {
+    where: { id: string };
+    select?: Select;
+  }): Promise<Row | null> {
     const row = this.rows.find((r) => r.id === args.where.id) ?? null;
-    return applySelect(row ? { ...row } : null, args.select);
+    return Promise.resolve(applySelect(row ? { ...row } : null, args.select));
   }
 
-  async count(args?: { where?: Row }) {
-    if (!args?.where) return this.rows.length;
-    return this.rows.filter((r) => matchWhere(r, args.where!)).length;
+  count(args?: { where?: Row }): Promise<number> {
+    if (!args?.where) return Promise.resolve(this.rows.length);
+    return Promise.resolve(
+      this.rows.filter((r) => matchWhere(r, args.where!)).length,
+    );
   }
 
-  async findMany(args?: { where?: Row; orderBy?: Row }) {
+  findMany(args?: { where?: Row; orderBy?: Row }): Promise<Row[]> {
     let rows = [...this.rows];
     if (args?.where) rows = rows.filter((r) => matchWhere(r, args.where!));
     if (args?.orderBy) {
@@ -125,24 +132,24 @@ class TranscriptSegmentTable {
           : Number(b[key]) - Number(a[key]),
       );
     }
-    return rows.map((r) => ({ ...r }));
+    return Promise.resolve(rows.map((r) => ({ ...r })));
   }
 }
 
 class MeetingNotesTable {
   rows: Row[] = [];
 
-  async create({ data }: { data: Row }) {
+  create({ data }: { data: Row }): Promise<Row> {
     const row: Row = { updatedAt: new Date(), version: 1, ...data };
     this.rows.push(row);
-    return { ...row };
+    return Promise.resolve({ ...row });
   }
 
   async upsert(args: {
     where: { sessionId: string };
     create: Row;
     update: Row;
-  }) {
+  }): Promise<Row> {
     const existing = this.rows.find(
       (r) => r.sessionId === args.where.sessionId,
     );
@@ -167,10 +174,10 @@ class MeetingNotesTable {
     return this.create({ data: args.create });
   }
 
-  async findUnique(args: { where: { sessionId: string } }) {
+  findUnique(args: { where: { sessionId: string } }): Promise<Row | null> {
     const row =
       this.rows.find((r) => r.sessionId === args.where.sessionId) ?? null;
-    return row ? { ...row } : null;
+    return Promise.resolve(row ? { ...row } : null);
   }
 }
 
@@ -184,7 +191,7 @@ export class InMemoryPrisma {
     this.meetingSession.notesTable = this.meetingNotes;
   }
 
-  async $transaction<T>(callback: (tx: this) => Promise<T>): Promise<T> {
+  $transaction<T>(callback: (tx: this) => Promise<T>): Promise<T> {
     return callback(this);
   }
 }

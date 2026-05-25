@@ -16,7 +16,7 @@ type FindManyResult = Array<{
 const buildPrisma = (rows: FindManyResult): PrismaService =>
   ({
     meetingSession: { findMany: jest.fn().mockResolvedValue(rows) },
-  } as unknown as PrismaService);
+  }) as unknown as PrismaService;
 
 const sessionRow = {
   id: 'session-1',
@@ -51,7 +51,7 @@ describe('ChatService', () => {
   it('returns a prompt when the user has not asked anything yet', async () => {
     const service = new ChatService(buildPrisma([sessionRow]));
     const fetchSpy = jest.fn();
-    global.fetch = fetchSpy as unknown as typeof fetch;
+    global.fetch = fetchSpy;
 
     const reply = await service.respond('user-1', {
       messages: [],
@@ -66,10 +66,12 @@ describe('ChatService', () => {
     process.env.GOOGLE_API_KEY = 'test-key';
     const service = new ChatService(buildPrisma([]));
     const fetchSpy = jest.fn();
-    global.fetch = fetchSpy as unknown as typeof fetch;
+    global.fetch = fetchSpy;
 
     const reply = await service.respond('user-1', {
-      messages: [{ role: 'user', content: 'What did we decide about pricing?' }],
+      messages: [
+        { role: 'user', content: 'What did we decide about pricing?' },
+      ],
     });
 
     expect(reply.content).toMatch(/couldn't find any meetings/i);
@@ -79,7 +81,7 @@ describe('ChatService', () => {
   it('falls back to the deterministic composer when no Google key is set', async () => {
     const service = new ChatService(buildPrisma([sessionRow]));
     const fetchSpy = jest.fn();
-    global.fetch = fetchSpy as unknown as typeof fetch;
+    global.fetch = fetchSpy;
 
     const reply = await service.respond('user-1', {
       messages: [{ role: 'user', content: 'Status on invoicing?' }],
@@ -98,11 +100,12 @@ describe('ChatService', () => {
     const fetchSpy = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({
-        choices: [{ message: { content: 'Invoicing ships by June 30.' } }],
-      }),
+      json: () =>
+        Promise.resolve({
+          choices: [{ message: { content: 'Invoicing ships by June 30.' } }],
+        }),
     });
-    global.fetch = fetchSpy as unknown as typeof fetch;
+    global.fetch = fetchSpy;
     const service = new ChatService(buildPrisma([sessionRow]));
 
     const reply = await service.respond('user-1', {
@@ -114,9 +117,16 @@ describe('ChatService', () => {
 
     const [url, init] = fetchSpy.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://example.test/v1/chat/completions');
-    expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-key');
+    expect((init.headers as Record<string, string>).Authorization).toBe(
+      'Bearer test-key',
+    );
 
-    const body = JSON.parse(init.body as string);
+    const body = JSON.parse(init.body as string) as {
+      model: string;
+      temperature: number;
+      max_tokens: number;
+      messages: Array<{ role: string; content: string }>;
+    };
     expect(body.model).toBe('gemini-2.5-flash');
     expect(body.temperature).toBe(0.4);
     expect(body.max_tokens).toBe(600);
@@ -134,8 +144,8 @@ describe('ChatService', () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: false,
       status: 429,
-      text: async () => 'Rate limited',
-    }) as unknown as typeof fetch;
+      text: () => Promise.resolve('Rate limited'),
+    });
     const service = new ChatService(buildPrisma([sessionRow]));
 
     const reply = await service.respond('user-1', {
@@ -151,8 +161,9 @@ describe('ChatService', () => {
     global.fetch = jest.fn().mockResolvedValue({
       ok: true,
       status: 200,
-      json: async () => ({ choices: [{ message: { content: '   ' } }] }),
-    }) as unknown as typeof fetch;
+      json: () =>
+        Promise.resolve({ choices: [{ message: { content: '   ' } }] }),
+    });
     const service = new ChatService(buildPrisma([sessionRow]));
 
     const reply = await service.respond('user-1', {

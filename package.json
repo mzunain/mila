@@ -16,7 +16,7 @@
     "dist:desktop:win": "pnpm --filter @mila/electron dist:win",
     "dist:desktop:linux": "pnpm --filter @mila/electron dist:linux",
     "dist:desktop:all": "pnpm --filter @mila/electron dist:all",
-    "lint": "pnpm --filter @mila/shared lint && pnpm --filter @mila/api lint && pnpm --filter @mila/web lint",
+    "lint": "pnpm --filter @mila/shared build && pnpm --filter @mila/api lint && pnpm --filter @mila/web lint",
     "test": "pnpm --filter @mila/shared test && pnpm --filter @mila/api test && pnpm --filter @mila/electron test",
     "typecheck": "pnpm --filter @mila/shared build && pnpm --filter @mila/api typecheck && pnpm --filter @mila/web typecheck && pnpm --filter @mila/electron typecheck",
     "check": "pnpm lint && pnpm typecheck && pnpm test && pnpm build"

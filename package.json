@@ -4,6 +4,7 @@
   "private": true,
   "description": "Mila is a multilingual AI meeting notes assistant for live and uploaded conversations.",
   "scripts": {
+    "start": "bash ./run.sh",
     "dev": "pnpm --filter @mila/shared build && pnpm --parallel --filter @mila/api --filter @mila/web dev",
     "dev:web": "pnpm --filter @mila/web dev",
     "dev:api": "pnpm --filter @mila/api dev",

@@ -25,11 +25,20 @@ services:
     build:
       context: ../apps/asr-worker
       args:
-        WHISPER_MODEL: ${WHISPER_MODEL:-small}
+        # `base` (74M) is the sweet spot on CPU — `small` (244M) cannot keep up
+        # with 5-second chunks on a typical laptop and ends up drowning the
+        # queue, which then surfaces as 5-minute undici fetch timeouts on the
+        # API. Override via WHISPER_MODEL in root .env if you have a GPU.
+        WHISPER_MODEL: ${WHISPER_MODEL:-base}
     ports:
       - "9000:9000"
+    # Same env_file as the api service — keep root .env the single source of
+    # truth for WHISPER_MODEL so a developer override actually propagates.
+    env_file:
+      - path: ../.env
+        required: false
     environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_MODEL: ${WHISPER_MODEL:-base}
       WHISPER_DEVICE: auto
       WHISPER_COMPUTE_TYPE: auto
 

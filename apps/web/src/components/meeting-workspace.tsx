@@ -229,8 +229,14 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
           }
 
           if (event.type === "error") {
+            // ASR_TIMEOUT / ASR_ERROR are per-chunk hiccups — the session is
+            // still recording on the server, so don't tear down the UI.
+            const isRecoverable =
+              event.code === "ASR_TIMEOUT" || event.code === "ASR_ERROR";
             setError(event.message);
-            setStatus("error");
+            if (!isRecoverable) {
+              setStatus("error");
+            }
           }
         };
 

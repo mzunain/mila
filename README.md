@@ -16,9 +16,45 @@ NVIDIA NIM), and ships as a desktop app (Electron) plus a web UI.
 ```
 
 The desktop app is a thin client. You always need a backend reachable at
-`http://localhost:4000`. The fastest way to get one is `docker compose up`.
+`http://localhost:4000`. For source development, the easiest entrypoint is
+`./run.sh`.
 
-## Self-host in one command
+## Run locally in one command
+
+Requirements: Docker Desktop (or Docker Engine), Node.js 20.19+, and at least
+one LLM API key for chat/notes.
+
+```bash
+git clone <this repo> mila && cd mila
+./run.sh
+# or: pnpm start
+```
+
+The runner creates `.env` from `.env.example` if needed, generates a local
+`JWT_SECRET`, starts Postgres / Redis / ASR in Docker, installs JavaScript
+dependencies, applies Prisma migrations, and launches the API plus web UI.
+
+Open:
+
+| Service | URL |
+| ------- | --- |
+| Web UI  | http://localhost:3000 |
+| API     | http://localhost:4000/api/health |
+
+Useful follow-up commands:
+
+```bash
+./run.sh stop         # stop Docker services
+./run.sh clean        # stop Docker services and wipe local DB data
+./run.sh logs         # follow Docker logs
+./run.sh backend      # run Docker backend only, without the web dev server
+```
+
+If `.env` was created for you, add at least one provider key such as
+`GOOGLE_API_KEY` or `OPENROUTER_API_KEY`; the app can boot without it, but
+chat and generated notes need a key.
+
+## Docker backend in one command
 
 Requirements: Docker Desktop (or Docker Engine) and at least one LLM API key.
 

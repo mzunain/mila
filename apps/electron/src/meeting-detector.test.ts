@@ -1,6 +1,10 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { probeProcessList } from './meeting-detector';
+import {
+  classifyCallApp,
+  parseAudioAssertionPids,
+  probeProcessList,
+} from './meeting-detector';
 
 // Synthetic process-list fragments captured from a real macOS `ps -axo command`
 // run. We test the regex matchers against representative shapes rather than
@@ -93,4 +97,95 @@ test('probeProcessList prefers Zoom over Teams when both look in-call', () => {
   const detection = probeProcessList(procList);
   assert.ok(detection);
   assert.equal(detection.provider, 'zoom');
+});
+
+// --- pmset audio-assertion detection -------------------------------------
+//
+// Catalyst apps (WhatsApp, FaceTime) don't show up in process-list detection
+// because they don't spawn distinct call helpers. We detect them via the
+// coreaudiod mic-in power assertion that macOS publishes when ANY app uses
+// the microphone.
+
+// Captured from a live `pmset -g assertions` run while in a WhatsApp call
+// (pid 64440 is WhatsApp).
+const PMSET_WHATSAPP_IN_CALL = `
+2026-05-27 17:39:13 +0300
+Assertion status system-wide:
+   BackgroundTask                 0
+   PreventUserIdleSystemSleep     1
+Listed by owning process:
+   pid 685(sharingd): [0x0002890500019bbe] 00:03:37 PreventUserIdleSystemSleep named: "Handoff"
+   pid 408(coreaudiod): [0x00026e27000196c1] 01:58:16 PreventUserIdleSystemSleep named: "com.apple.audio.VPAUAggregateAudioDevice-0xc393a8040.context.preventuseridlesleep"
+\tCreated for PID: 64440.
+\tResources: audio-in audio-out BuiltInMicrophoneDevice
+   pid 64440(WhatsApp): [0x00026e200005962c] 01:58:22 PreventUserIdleDisplaySleep named: "net.whatsapp.idletimer"
+`;
+
+// Captured while playing music in Apple Music — coreaudiod holds an
+// audio-OUT assertion but no audio-in. Should NOT fire.
+const PMSET_MUSIC_PLAYBACK_ONLY = `
+Assertion status system-wide:
+   PreventUserIdleSystemSleep     1
+Listed by owning process:
+   pid 408(coreaudiod): [0x00026e27000196c2] 00:01:00 PreventUserIdleSystemSleep named: "com.apple.audio.context.preventuseridlesleep"
+\tCreated for PID: 1234.
+\tResources: audio-out BuiltInSpeakerDevice
+`;
+
+const PMSET_IDLE = `
+Assertion status system-wide:
+   PreventUserIdleSystemSleep     0
+Listed by owning process:
+   pid 337(powerd): [0x0...] 05:55:00 PreventUserIdleSystemSleep named: "Powerd"
+`;
+
+test('parseAudioAssertionPids extracts PIDs from coreaudiod mic-in assertions', () => {
+  const pids = parseAudioAssertionPids(PMSET_WHATSAPP_IN_CALL);
+  assert.deepEqual(pids, [64440]);
+});
+
+test('parseAudioAssertionPids ignores audio-out-only assertions (music playback)', () => {
+  const pids = parseAudioAssertionPids(PMSET_MUSIC_PLAYBACK_ONLY);
+  assert.deepEqual(pids, []);
+});
+
+test('parseAudioAssertionPids returns empty when no coreaudiod assertions exist', () => {
+  assert.deepEqual(parseAudioAssertionPids(PMSET_IDLE), []);
+});
+
+test('classifyCallApp maps WhatsApp to the whatsapp provider', () => {
+  const detection = classifyCallApp('WhatsApp');
+  assert.ok(detection);
+  assert.equal(detection.provider, 'whatsapp');
+  assert.equal(detection.title, 'WhatsApp call');
+});
+
+test('classifyCallApp is case-insensitive', () => {
+  assert.equal(classifyCallApp('whatsapp')?.provider, 'whatsapp');
+  assert.equal(classifyCallApp('FaceTime')?.provider, 'facetime');
+});
+
+test('classifyCallApp denylists Mila itself to prevent recursive detection', () => {
+  // If we fired on Mila's own mic use, the act of recording would
+  // re-trigger detection forever.
+  assert.equal(classifyCallApp('Mila'), null);
+  assert.equal(classifyCallApp('Mila Helper'), null);
+});
+
+test('classifyCallApp denylists non-call mic users like Voice Memos', () => {
+  assert.equal(classifyCallApp('VoiceMemos'), null);
+  assert.equal(classifyCallApp('QuickTime Player'), null);
+});
+
+test('classifyCallApp returns null for unknown apps so we do not auto-start on every mic use', () => {
+  // Conservative: only allowlisted apps fire. An unknown mic-using app
+  // (e.g. a niche meeting client) is better surfaced as a feature
+  // request than as a noisy false-positive.
+  assert.equal(classifyCallApp('SomeRandomApp'), null);
+});
+
+test('classifyCallApp matches Chrome/Chromium as google-meet (best-effort)', () => {
+  const detection = classifyCallApp('Google Chrome');
+  assert.ok(detection);
+  assert.equal(detection.provider, 'google-meet');
 });

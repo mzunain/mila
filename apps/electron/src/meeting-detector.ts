@@ -24,6 +24,13 @@ export type DetectedProvider =
   | 'microsoft-teams'
   | 'google-meet'
   | 'webex'
+  | 'whatsapp'
+  | 'facetime'
+  | 'discord'
+  | 'slack'
+  | 'telegram'
+  | 'signal'
+  | 'skype'
   | 'unknown';
 
 export interface DetectedMeeting {
@@ -42,18 +49,21 @@ interface DetectorOptions {
 const DEFAULT_INTERVAL_MS = 3000;
 
 /**
- * Returns the full process list as a single string (one process path per
- * line). We invoke `ps -axo command` with `-c` to also surface menu-bar /
- * background-only processes. Anything we can't parse becomes empty string so
- * a single bad poll doesn't crash the detector.
+ * Tiny helper around `spawn` that resolves with stdout as a string and
+ * never rejects — a single bad invocation must not crash the detector
+ * loop. Times out after `timeoutMs` and returns whatever buffered.
  */
-function listProcesses(timeoutMs = 2500): Promise<string> {
+function runCommand(
+  command: string,
+  args: string[],
+  timeoutMs = 2500,
+): Promise<string> {
   return new Promise((resolve) => {
-    const child = spawn('ps', ['-axo', 'command']);
+    const child = spawn(command, args);
     let stdout = '';
     const timeout = setTimeout(() => {
       child.kill('SIGKILL');
-      resolve('');
+      resolve(stdout);
     }, timeoutMs);
     child.stdout.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf8');
@@ -67,6 +77,46 @@ function listProcesses(timeoutMs = 2500): Promise<string> {
       resolve(stdout);
     });
   });
+}
+
+/**
+ * Returns the full process list as a single string (one process path per
+ * line). We invoke `ps -axo command` to surface every user-owned process
+ * including menu-bar / background-only ones.
+ */
+function listProcesses(timeoutMs = 2500): Promise<string> {
+  return runCommand('ps', ['-axo', 'command'], timeoutMs);
+}
+
+/**
+ * Returns the current macOS power-assertion table. We parse this for
+ * `coreaudiod` audio-in assertions which fire when any app is using the
+ * microphone — the only reliable signal for Catalyst apps like WhatsApp
+ * and FaceTime, which don't spawn distinct call-helper processes.
+ */
+function getPmsetAssertions(timeoutMs = 2500): Promise<string> {
+  return runCommand('pmset', ['-g', 'assertions'], timeoutMs);
+}
+
+/**
+ * Resolves a PID to its short Comm name (the value in `ps -p <pid> -o
+ * comm=`). On macOS this is the bundle's main executable name without
+ * the path — e.g. "WhatsApp", "Google Chrome", "FaceTime". Returns empty
+ * string if the PID is gone by the time we look it up.
+ */
+async function getProcessCommName(pid: number): Promise<string> {
+  const out = await runCommand(
+    'ps',
+    ['-p', String(pid), '-o', 'comm='],
+    1500,
+  );
+  // The Comm value can be a full path on macOS (e.g.
+  // "/Applications/WhatsApp.app/Contents/MacOS/WhatsApp"). We want the
+  // last path segment.
+  const trimmed = out.trim();
+  if (!trimmed) return '';
+  const lastSlash = trimmed.lastIndexOf('/');
+  return lastSlash >= 0 ? trimmed.slice(lastSlash + 1) : trimmed;
 }
 
 /**
@@ -144,6 +194,160 @@ export function probeProcessList(procList: string): DetectedMeeting | null {
 }
 
 /**
+ * Catalyst apps (WhatsApp, FaceTime) don't spawn distinct call helpers —
+ * the call lives inside the main app process, so `ps`-based detection
+ * misses them entirely. Fortunately macOS surfaces in-call apps a second
+ * way: when an app holds the microphone, `coreaudiod` takes out a
+ * `PreventUserIdleSystemSleep` power assertion on its behalf with
+ * `Resources: audio-in ...` and a `Created for PID:` line pointing at
+ * the actual app.
+ *
+ * We parse `pmset -g assertions` for those assertion blocks and look up
+ * each PID's app name. Only apps in {@link CALL_APP_PROVIDER_MAP} fire a
+ * detection — that allowlist exists to avoid firing on Voice Memos,
+ * macOS Dictation, QuickTime audio capture, and (critically) Mila's own
+ * mic use, which would loop forever.
+ *
+ * For an unknown call app we still fire `provider: 'unknown'` with the
+ * app's display name in the title, so the user gets a session started
+ * even if we haven't catalogued the app yet.
+ */
+const CALL_APP_PROVIDER_MAP: Record<string, DetectedProvider> = {
+  whatsapp: 'whatsapp',
+  facetime: 'facetime',
+  discord: 'discord',
+  slack: 'slack',
+  telegram: 'telegram',
+  signal: 'signal',
+  skype: 'skype',
+  // Chromium-based meeting apps (Google Meet in browser) — Chrome holds
+  // the mic when in a Meet call. Best-effort: we can't tell Meet from
+  // any other Chrome mic use, but in practice it's almost always a
+  // meeting.
+  'google chrome': 'google-meet',
+  chromium: 'google-meet',
+};
+
+/**
+ * Apps we explicitly do NOT fire on, even if they hold the mic. Mila
+ * itself is the critical one: if we auto-start when Mila opens the mic,
+ * the very act of recording would re-trigger detection forever.
+ */
+const CALL_APP_DENYLIST = new Set([
+  'mila',
+  'mila helper',
+  'mila helper (renderer)',
+  'mila helper (gpu)',
+  'mila helper (plugin)',
+  'voicememos',
+  'voice memos',
+  'quicktime player',
+  'photo booth',
+  'screen recording',
+  'logi tune',
+  'audio midi setup',
+]);
+
+/**
+ * Parse a single block of `pmset -g assertions` output looking for
+ * coreaudiod entries that indicate an app is actively using the
+ * microphone. Returns the list of PIDs that own a mic-in assertion.
+ *
+ * Example block we're matching:
+ *
+ *   pid 408(coreaudiod): [0x...] 01:58:16 PreventUserIdleSystemSleep
+ *     named: "com.apple.audio.VPAUAggregateAudioDevice-0x...preventuseridlesleep"
+ *     Created for PID: 64440.
+ *     Resources: audio-in audio-out BuiltInMicrophoneDevice
+ */
+export function parseAudioAssertionPids(pmsetOutput: string): number[] {
+  const pids: number[] = [];
+  // Split into per-assertion blocks. Each assertion's continuation lines
+  // are indented with whitespace; split on a line that starts with
+  // non-whitespace to break blocks cleanly.
+  const lines = pmsetOutput.split('\n');
+  let current: string[] = [];
+  const flush = () => {
+    if (!current.length) return;
+    const block = current.join('\n');
+    // Only consider blocks owned by coreaudiod (filters out the app's
+    // own PreventUserIdleDisplaySleep assertions, which aren't a call
+    // signal).
+    if (!/\bcoreaudiod\b/.test(block)) return;
+    // Mic-in resource is the gating signal. "audio-out" alone happens
+    // for normal playback (music, video) and isn't a call.
+    if (!/\baudio-in\b/.test(block)) return;
+    const pidMatch = /Created for PID:\s*(\d+)/.exec(block);
+    if (pidMatch) pids.push(Number(pidMatch[1]));
+  };
+  for (const line of lines) {
+    // A new top-level assertion starts with optional whitespace then `pid`.
+    // We treat any line starting with non-space as a fresh block header,
+    // but the assertion lines all start with 3-spaces of indent so the
+    // simpler heuristic is: a line starting with "   pid " begins a block.
+    if (/^\s{0,3}pid \d+\(/.test(line)) {
+      flush();
+      current = [line];
+    } else {
+      current.push(line);
+    }
+  }
+  flush();
+  // Dedup — same PID can hold multiple audio assertions.
+  return Array.from(new Set(pids));
+}
+
+/**
+ * Map an executable / Comm name (as returned by `ps -p <pid> -o comm=`)
+ * to a {@link DetectedMeeting} via the allowlist. Returns null if the
+ * app isn't a known call app or is in the denylist.
+ */
+export function classifyCallApp(commName: string): DetectedMeeting | null {
+  const normalized = commName.trim().toLowerCase();
+  if (!normalized) return null;
+  if (CALL_APP_DENYLIST.has(normalized)) return null;
+
+  // Try exact match first, then substring (handles "WhatsApp Helper").
+  const provider =
+    CALL_APP_PROVIDER_MAP[normalized] ??
+    Object.entries(CALL_APP_PROVIDER_MAP).find(([key]) =>
+      normalized.includes(key),
+    )?.[1];
+
+  if (provider) {
+    return {
+      provider,
+      title: titleForProvider(provider, commName),
+      detectedAt: new Date().toISOString(),
+    };
+  }
+  return null;
+}
+
+function titleForProvider(provider: DetectedProvider, commName: string): string {
+  switch (provider) {
+    case 'whatsapp':
+      return 'WhatsApp call';
+    case 'facetime':
+      return 'FaceTime call';
+    case 'discord':
+      return 'Discord call';
+    case 'slack':
+      return 'Slack huddle';
+    case 'telegram':
+      return 'Telegram call';
+    case 'signal':
+      return 'Signal call';
+    case 'skype':
+      return 'Skype call';
+    case 'google-meet':
+      return 'Google Meet';
+    default:
+      return `${commName} call`;
+  }
+}
+
+/**
  * Stable identity for a detected meeting. We use this to deduplicate — the
  * detector polls every few seconds and we only want to fire onDetect when
  * the meeting *changes*, not on every tick the same meeting is still live.
@@ -169,9 +373,27 @@ export function startMeetingDetector(options: DetectorOptions): () => void {
   const tick = async () => {
     if (stopped) return;
     try {
-      const procList = await listProcesses();
-      if (!procList) return;
-      const detection = probeProcessList(procList);
+      // Fetch both signals in parallel — `ps` and `pmset` are independent.
+      const [procList, pmsetOutput] = await Promise.all([
+        listProcesses(),
+        getPmsetAssertions(),
+      ]);
+      let detection = procList ? probeProcessList(procList) : null;
+      // Process-name detection is preferred (we know exactly which
+      // provider it is and there's zero chance of false positives), but
+      // it can't see Catalyst apps. Fall through to audio-assertion
+      // detection only if the process list didn't yield a match.
+      if (!detection && pmsetOutput) {
+        const pids = parseAudioAssertionPids(pmsetOutput);
+        for (const pid of pids) {
+          const commName = await getProcessCommName(pid);
+          const candidate = classifyCallApp(commName);
+          if (candidate) {
+            detection = candidate;
+            break;
+          }
+        }
+      }
       const key = meetingKey(detection);
       if (key) {
         // Always emit on every tick where a meeting is detected. The first

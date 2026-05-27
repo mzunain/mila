@@ -6,6 +6,7 @@ import { RawData, WebSocket } from 'ws';
 import { MeetingsService } from './meetings.service';
 import { AuthService } from '../auth/auth.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
+import { AsrTimeoutError } from './providers/http-asr.provider';
 
 type IncomingRequest = {
   url?: string;
@@ -78,9 +79,24 @@ export class MeetingsGateway {
       return;
     }
 
+    // Parse separately so a malformed payload is reported as BAD_EVENT
+    // rather than getting muddled with downstream service errors.
+    let event: ClientMeetingEvent;
     try {
-      const event = JSON.parse(rawPayload) as ClientMeetingEvent;
+      event = JSON.parse(rawPayload) as ClientMeetingEvent;
+    } catch (error) {
+      this.logger.warn(
+        `Failed to parse meeting stream payload: ${describe(error)}`,
+      );
+      this.send(client, {
+        type: 'error',
+        code: 'BAD_EVENT',
+        message: 'Invalid meeting stream event payload',
+      });
+      return;
+    }
 
+    try {
       if (event.type === 'start') {
         const detail = await this.meetingsService.getSessionForClient(
           userId,
@@ -155,15 +171,54 @@ export class MeetingsGateway {
           event.sessionId,
         );
         this.broadcast(event.sessionId, { type: 'notes', notes });
+        return;
       }
     } catch (error) {
-      this.logger.warn(error);
+      this.handleProcessingError(client, event, error);
+    }
+  }
+
+  /**
+   * Classify processing errors so the client can react sensibly:
+   *   - ASR timeouts on audio chunks are recoverable — drop the chunk,
+   *     send a soft notice, keep the session alive.
+   *   - Anything else gets surfaced with its real message so the user
+   *     sees something more useful than "Invalid meeting stream event".
+   */
+  private handleProcessingError(
+    client: AuthedSocket,
+    event: ClientMeetingEvent,
+    error: unknown,
+  ) {
+    if (error instanceof AsrTimeoutError) {
+      this.logger.warn(
+        `ASR timeout (chunk ${error.chunkId}, ${error.timeoutMs}ms) — dropping chunk and continuing`,
+      );
       this.send(client, {
         type: 'error',
-        code: 'BAD_EVENT',
-        message: 'Invalid meeting stream event',
+        code: 'ASR_TIMEOUT',
+        message: `Transcription is falling behind — chunk ${error.chunkId} was skipped. The session is still recording.`,
       });
+      return;
     }
+
+    const description = describe(error);
+    this.logger.warn(`Meeting stream error (${event.type}): ${description}`);
+
+    if (event.type === 'audio-chunk') {
+      this.send(client, {
+        type: 'error',
+        code: 'ASR_ERROR',
+        message: `Transcription failed for one audio chunk (${description}). The session is still recording.`,
+      });
+      return;
+    }
+
+    this.send(client, {
+      type: 'error',
+      code: 'INTERNAL',
+      message: `Meeting stream error: ${description}`,
+    });
   }
 
   private send(client: WebSocket, event: ServerMeetingEvent) {
@@ -244,6 +299,17 @@ function extractToken(request?: IncomingRequest): string | null {
     }
   }
   return null;
+}
+
+function describe(error: unknown): string {
+  if (error instanceof Error) {
+    const cause = (error as { cause?: unknown }).cause;
+    if (cause instanceof Error) {
+      return `${error.message} (${cause.message})`;
+    }
+    return error.message;
+  }
+  return String(error);
 }
 
 function decodePayload(payload: RawData) {

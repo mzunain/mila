@@ -25,11 +25,14 @@ services:
     build:
       context: ../apps/asr-worker
       args:
-        # `base` (74M) is the sweet spot on CPU — `small` (244M) cannot keep up
-        # with 5-second chunks on a typical laptop and ends up drowning the
-        # queue, which then surfaces as 5-minute undici fetch timeouts on the
-        # API. Override via WHISPER_MODEL in root .env if you have a GPU.
-        WHISPER_MODEL: ${WHISPER_MODEL:-base}
+        # Each 5-second chunk must transcribe in *under* 5 seconds or the queue
+        # backs up and every chunk eventually blows past the API's ASR_TIMEOUT_MS,
+        # which the UI shows as a transcript stuck forever on "waiting". Measured
+        # on a 4-vCPU colima VM (int8, greedy): base = 1.1-2.2x realtime (loses
+        # the race), tiny = 0.65x (keeps up with headroom). So `tiny` is the
+        # default. Override via WHISPER_MODEL in root .env when you have spare CPU
+        # or a GPU (`base`/`small`/`large-v3` are more accurate but heavier).
+        WHISPER_MODEL: ${WHISPER_MODEL:-tiny}
     ports:
       - "9000:9000"
     # Same env_file as the api service — keep root .env the single source of
@@ -38,9 +41,15 @@ services:
       - path: ../.env
         required: false
     environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-base}
+      WHISPER_MODEL: ${WHISPER_MODEL:-tiny}
       WHISPER_DEVICE: auto
-      WHISPER_COMPUTE_TYPE: auto
+      # int8 + greedy decoding (beam_size 1) + a thread count pinned to the VM's
+      # vCPUs are what pull a CPU transcribe under realtime. Without the pin,
+      # CTranslate2 reads the host's core count and oversubscribes the VM. See
+      # the build args above for the measured realtime factors.
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+      WHISPER_BEAM_SIZE: ${WHISPER_BEAM_SIZE:-1}
+      WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-4}
 
   api:
     build:
@@ -74,6 +83,10 @@ services:
       # falling back to simulated "mock" transcripts if .env drifts or is absent.
       ASR_PROVIDER: http
       ASR_BASE_URL: http://asr-worker:9000
+      # Headroom over the worker's per-chunk time. With `tiny` each chunk lands
+      # in a few seconds; this only guards the occasional dense/long chunk, while
+      # still abandoning a genuinely stuck worker instead of hanging the session.
+      ASR_TIMEOUT_MS: ${ASR_TIMEOUT_MS:-45000}
 
 volumes:
   mila-postgres:

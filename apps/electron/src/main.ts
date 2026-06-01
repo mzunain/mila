@@ -85,12 +85,23 @@ const ensureMainWindow = async (): Promise<BrowserWindow> => {
   return win;
 };
 
+// Pull the workspace to the foreground hard enough to clear a fullscreen call
+// app. A bare `win.show()/focus()` loses to a fullscreen Zoom/Meet Space — the
+// window stays hidden and "Take Notes" looks dead. Activating the app with
+// `steal` switches to the window's Space and raises it above the call.
+function surfaceMainWindow(win: BrowserWindow): void {
+  if (win.isDestroyed()) return;
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.moveTop();
+  app.focus({ steal: true });
+  win.focus();
+}
+
 app.on('second-instance', (_event, argv) => {
   const win = getMainWindow();
   if (win) {
-    if (win.isMinimized()) win.restore();
-    win.show();
-    win.focus();
+    surfaceMainWindow(win);
     const deepLink = argv.find((arg) => arg.startsWith(`${APP_PROTOCOL}://`));
     if (deepLink) win.webContents.send('mila:deep-link', deepLink);
   }
@@ -227,7 +238,7 @@ app.whenReady().then(async () => {
 app.on('activate', () => {
   if (!app.isReady()) return;
   void ensureMainWindow().then((win) => {
-    win.show();
+    surfaceMainWindow(win);
   }).catch((err) => {
     console.error('[main] activate failed', err);
   });
@@ -289,9 +300,7 @@ async function gateBackendOnStartup(): Promise<void> {
 
 async function takeNotesForDetectedMeeting(meeting: DetectedMeeting) {
   const win = await ensureMainWindow();
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
+  surfaceMainWindow(win);
   await waitForMainFrameLoad(win);
   sendDetectedMeetingStartCommand(win, meeting);
   await navigateMainWindowToWorkspace(win);

@@ -30,6 +30,7 @@ import {
   isBackendLaunchAgentInstalled,
   uninstallBackendLaunchAgent,
 } from './launch-agent-installer';
+import { applyAssistOverlayEnabled } from './assist-overlay-window';
 
 let tray: Tray | null = null;
 let scheduledCalls: ScheduledCall[] = [];
@@ -88,6 +89,16 @@ export function setupTray(getWindow: () => BrowserWindow | null) {
       {
         label: 'Stop Listening',
         click: () => sendCommand(getWindow(), 'mila:cmd:stop-mic'),
+      },
+      {
+        label: 'Coaching overlay',
+        type: 'checkbox',
+        checked: prefs.get('assistOverlay'),
+        click: (item) => {
+          setPrefs({ assistOverlay: item.checked });
+          applyAssistOverlayEnabled(item.checked);
+          rebuild();
+        },
       },
       { type: 'separator' },
       {

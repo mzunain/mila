@@ -12,6 +12,7 @@ import { createMainWindow } from './window';
 import { buildMenu } from './menu';
 import {
   clearDetectedCallInTray,
+  refreshTrayForPreferences,
   setupTray,
   showDetectedCallInTray,
 } from './tray';
@@ -39,6 +40,11 @@ import { readLoginItemSettings, syncLaunchAtLoginPreference } from './login-item
 import { healthUrlFromApiUrl, pollHealth } from './backend-health';
 import { probeBackendHealth, runBackendAutostartNow } from './backend-runner';
 import { closeBackendSplash, showBackendSplash } from './splash-window';
+import { enableLoopbackAudioCapture } from './loopback';
+import {
+  applyAssistOverlayEnabled,
+  setAssistOverlayHideHandler,
+} from './assist-overlay-window';
 
 app.setName(APP_NAME);
 
@@ -105,6 +111,14 @@ app.whenReady().then(async () => {
   });
   setupTray(getMainWindow);
 
+  // Dismissing the floating coaching overlay from its own × button turns the
+  // preference off so the tray checkbox and the next launch agree.
+  setAssistOverlayHideHandler(() => {
+    setPrefs({ assistOverlay: false });
+    refreshTrayForPreferences();
+  });
+  applyAssistOverlayEnabled(getPrefs().assistOverlay);
+
   try {
     try {
       await gateBackendOnStartup();
@@ -114,6 +128,9 @@ app.whenReady().then(async () => {
     }
 
     const win = await ensureMainWindow();
+    // Let the workspace capture the remote party's audio (system loopback) for
+    // the live copilot, not just the mic. No-op off macOS / older Electron.
+    enableLoopbackAudioCapture(win);
     // Hand off from the splash to the workspace once it has content.
     win.webContents.once('did-finish-load', () => closeBackendSplash());
     win.webContents.once('did-fail-load', () => closeBackendSplash());

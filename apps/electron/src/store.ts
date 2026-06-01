@@ -13,6 +13,7 @@ export type Preferences = {
   visibleCalendars: Record<string, boolean>;
   autoDetectedMeetingNotifications: boolean;
   mutedMeetingApps: string[];
+  assistOverlay: boolean;
   theme: 'system' | 'light' | 'dark';
   windowBounds: { x?: number; y?: number; width: number; height: number };
 };
@@ -28,6 +29,7 @@ const DEFAULTS: Preferences = {
   visibleCalendars: {},
   autoDetectedMeetingNotifications: true,
   mutedMeetingApps: [],
+  assistOverlay: false,
   theme: 'system',
   windowBounds: { width: 1280, height: 840 },
 };

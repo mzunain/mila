@@ -35,7 +35,10 @@ import {
   showMeetingDetectionWindow,
 } from './meeting-detection-window';
 import type { DetectedMeeting } from './meeting-detector';
-import { syncLaunchAtLoginPreference } from './login-item';
+import { readLoginItemSettings, syncLaunchAtLoginPreference } from './login-item';
+import { healthUrlFromApiUrl, pollHealth } from './backend-health';
+import { probeBackendHealth, runBackendAutostartNow } from './backend-runner';
+import { closeBackendSplash, showBackendSplash } from './splash-window';
 
 app.setName(APP_NAME);
 
@@ -103,7 +106,20 @@ app.whenReady().then(async () => {
   setupTray(getMainWindow);
 
   try {
-    await ensureMainWindow();
+    try {
+      await gateBackendOnStartup();
+    } catch (gateErr) {
+      console.error('[main] backend gate failed', gateErr);
+      closeBackendSplash();
+    }
+
+    const win = await ensureMainWindow();
+    // Hand off from the splash to the workspace once it has content.
+    win.webContents.once('did-finish-load', () => closeBackendSplash());
+    win.webContents.once('did-fail-load', () => closeBackendSplash());
+    const splashSafety = setTimeout(() => closeBackendSplash(), 8_000);
+    splashSafety.unref?.();
+
     initAutoUpdater(getMainWindow);
 
     // Watch for calls and surface a single desktop affordance. On macOS the
@@ -178,6 +194,7 @@ app.whenReady().then(async () => {
       log: (msg) => console.log(msg),
     });
   } catch (err) {
+    closeBackendSplash();
     console.error('[main] fatal startup error', err);
     await dialog.showMessageBox({
       type: 'error',
@@ -220,6 +237,37 @@ async function resolveLoadUrl(): Promise<string> {
     NEXT_PUBLIC_API_WS_URL: wsUrl,
     NODE_ENV: 'production',
   });
+}
+
+// The desktop app launches at login but is a thin client — without the Docker
+// backend up, the workspace loads into a 500. When the user actively opens the
+// app and the API is down, show a splash, bring the stack up, and wait for
+// health before loading the workspace. This is best-effort: it never blocks
+// startup longer than the timeout and never makes things worse than today.
+const BACKEND_GATE_TIMEOUT_MS = 90_000;
+
+async function gateBackendOnStartup(): Promise<void> {
+  // In dev the developer runs the API + web themselves (pnpm dev / run.sh).
+  if (isDev) return;
+
+  // On a hidden login launch the LaunchAgent brings the backend up on its own;
+  // a splash popping up unprompted would be intrusive. Only intervene when the
+  // user is actually opening the app to the foreground.
+  const loginSettings = readLoginItemSettings(app);
+  if (loginSettings.wasOpenedAtLogin || loginSettings.wasOpenedAsHidden) return;
+
+  const healthUrl = healthUrlFromApiUrl(getPrefs().apiUrl);
+  if (await probeBackendHealth(healthUrl)) return; // already healthy — no splash
+
+  showBackendSplash();
+  runBackendAutostartNow((message) => console.log(message));
+  await pollHealth({
+    probe: () => probeBackendHealth(healthUrl),
+    timeoutMs: BACKEND_GATE_TIMEOUT_MS,
+    intervalMs: 2_000,
+  });
+  // Healthy or timed out — fall through and load the workspace either way. The
+  // splash is dismissed once the main window has content (see whenReady).
 }
 
 async function takeNotesForDetectedMeeting(meeting: DetectedMeeting) {

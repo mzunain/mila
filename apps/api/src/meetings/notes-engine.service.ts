@@ -186,6 +186,58 @@ export class NotesEngineService {
       transcript: string;
     },
   ) {
+    return this.callChat(
+      route,
+      {
+        system:
+          'You are Mila, an AI meeting assistant. Convert multilingual and code-switched meeting transcripts into structured notes. Preserve meaning over literal translation. Return only valid JSON.',
+        user: buildNotesPrompt(input),
+      },
+      { temperature: 0.2, maxTokens: input.mode === 'final' ? 1400 : 800 },
+    );
+  }
+
+  /** Does the deployment have at least one usable LLM route? */
+  hasLlmRoutes(): boolean {
+    return this.llmRoutes.length > 0;
+  }
+
+  /**
+   * Public chat entry point for features beyond notes (e.g. the live copilot).
+   * Tries each configured route in order and returns the first non-empty
+   * completion, or null if every route fails / none are configured.
+   */
+  async completeChat(
+    messages: { system: string; user: string },
+    opts: { temperature?: number; maxTokens?: number } = {},
+  ): Promise<string | null> {
+    for (const route of this.llmRoutes) {
+      try {
+        const content = await this.callChat(route, messages, opts);
+        if (content && content.trim()) {
+          return content;
+        }
+      } catch (error) {
+        this.logger.warn(
+          `LLM chat route failed for ${route.label}: ${
+            error instanceof Error ? error.message : 'unknown error'
+          }`,
+        );
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Run one chat-completion turn against a specific route. Shared by the notes
+   * pipeline and the live copilot so all OpenAI-compatible request shaping and
+   * response unwrapping lives in one place.
+   */
+  private async callChat(
+    route: LlmRoute,
+    messages: { system: string; user: string },
+    opts: { temperature?: number; maxTokens?: number } = {},
+  ) {
     const response = await fetch(
       `${route.baseUrl.replace(/\/$/, '')}/chat/completions`,
       {
@@ -193,18 +245,11 @@ export class NotesEngineService {
         headers: buildHeaders(route),
         body: JSON.stringify({
           model: route.model,
-          temperature: 0.2,
-          max_tokens: input.mode === 'final' ? 1400 : 800,
+          temperature: opts.temperature ?? 0.2,
+          max_tokens: opts.maxTokens ?? 800,
           messages: [
-            {
-              role: 'system',
-              content:
-                'You are Mila, an AI meeting assistant. Convert multilingual and code-switched meeting transcripts into structured notes. Preserve meaning over literal translation. Return only valid JSON.',
-            },
-            {
-              role: 'user',
-              content: buildNotesPrompt(input),
-            },
+            { role: 'system', content: messages.system },
+            { role: 'user', content: messages.user },
           ],
         }),
         signal: AbortSignal.timeout(this.timeoutMs),

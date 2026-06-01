@@ -1,6 +1,11 @@
 import { SupportedLanguageCode, TextDirection } from "./language.js";
 import { MeetingNotes } from "./notes.js";
 import type { ActionReviewRisk } from "./intelligence.js";
+import type {
+  AssistContext,
+  AssistSuggestion,
+  AssistTurn,
+} from "./live-assist.js";
 
 export type MeetingStatus =
   | "scheduled"
@@ -123,6 +128,23 @@ export type ClientMeetingEvent =
   | {
       type: "stop";
       sessionId: string;
+    }
+  | {
+      // Live conversation copilot: ask for "what should I say next" talking
+      // points based on the recent turns. Sent over the same authed socket as
+      // the meeting stream; the reply is private to the requesting client.
+      type: "assist-request";
+      sessionId: string;
+      turns: AssistTurn[];
+      context?: AssistContext;
+      /** Cap on talking points; engine clamps to 1..6 (default 4). */
+      maxPoints?: number;
+      /**
+       * True when the user explicitly asked (e.g. pressed a hotkey). Manual
+       * requests bypass the "is the tail worth answering" heuristic and always
+       * get a terminal reply (suggestion or assist-unavailable).
+       */
+      manual?: boolean;
     };
 
 export type ServerMeetingEvent =
@@ -150,4 +172,18 @@ export type ServerMeetingEvent =
       type: "error";
       message: string;
       code: string;
+    }
+  | {
+      // Private talking-point suggestion for the requesting client only.
+      type: "assist-suggestion";
+      sessionId: string;
+      suggestion: AssistSuggestion;
+    }
+  | {
+      // A manual assist-request that produced nothing actionable. `no-model`
+      // means no LLM is configured (the feature can't run); `no-suggestion`
+      // means the model had nothing useful to add right now.
+      type: "assist-unavailable";
+      sessionId: string;
+      reason: "no-model" | "no-suggestion";
     };

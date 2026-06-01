@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import type { ClientMeetingEvent, ServerMeetingEvent } from '@mila/shared';
 import { RawData, WebSocket } from 'ws';
 import { MeetingsService } from './meetings.service';
+import { LiveAssistService } from './live-assist.service';
 import { AuthService } from '../auth/auth.service';
 import type { JwtPayload } from '../auth/jwt.strategy';
 import { AsrTimeoutError } from './providers/http-asr.provider';
@@ -23,6 +24,7 @@ export class MeetingsGateway {
 
   constructor(
     private readonly meetingsService: MeetingsService,
+    private readonly liveAssist: LiveAssistService,
     private readonly jwt: JwtService,
     private readonly auth: AuthService,
   ) {}
@@ -171,6 +173,39 @@ export class MeetingsGateway {
           event.sessionId,
         );
         this.broadcast(event.sessionId, { type: 'notes', notes });
+        return;
+      }
+
+      if (event.type === 'assist-request') {
+        // The copilot is private to the asking user and reads no session data —
+        // the turns come from the client — so we skip the session lookup and
+        // reply only to this socket. The connection is already authed.
+        const outcome = await this.liveAssist.suggest({
+          turns: event.turns ?? [],
+          context: event.context,
+          maxPoints: event.maxPoints,
+          manual: event.manual === true,
+        });
+
+        if (outcome.suggestion) {
+          this.send(client, {
+            type: 'assist-suggestion',
+            sessionId: event.sessionId,
+            suggestion: outcome.suggestion,
+          });
+          return;
+        }
+
+        // Only give a terminal "nothing" for an explicit ask; silent auto-skips
+        // keep the channel quiet until there is a real opening to respond to.
+        if (event.manual && outcome.reason !== 'not-triggered') {
+          this.send(client, {
+            type: 'assist-unavailable',
+            sessionId: event.sessionId,
+            reason:
+              outcome.reason === 'no-model' ? 'no-model' : 'no-suggestion',
+          });
+        }
         return;
       }
     } catch (error) {

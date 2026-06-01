@@ -24,6 +24,12 @@ import type { DetectedMeeting } from './meeting-detector';
 import { detectedCallActionCopy } from './detected-call-actions';
 import { meetingNotificationKey } from './meeting-notification-policy';
 import { syncLaunchAtLoginPreference } from './login-item';
+import { backendAutostartAvailable, runBackendAutostartNow } from './backend-runner';
+import {
+  installBackendLaunchAgent,
+  isBackendLaunchAgentInstalled,
+  uninstallBackendLaunchAgent,
+} from './launch-agent-installer';
 
 let tray: Tray | null = null;
 let scheduledCalls: ScheduledCall[] = [];
@@ -99,6 +105,7 @@ export function setupTray(getWindow: () => BrowserWindow | null) {
           rebuild();
         },
       },
+      ...buildBackendControlItems(rebuild),
       {
         label: 'Check for Updates…',
         click: () => checkForUpdatesInteractive(getWindow),
@@ -178,6 +185,35 @@ export function clearDetectedCallInTray(meetingKey?: string) {
   }
   activeDetectedCall = null;
   rebuildTrayMenu?.();
+}
+
+// "Launch at login" governs the desktop shell; these govern the Docker backend
+// the shell talks to. Only shown where we can actually run it (macOS + a source
+// checkout where the autostart script ships) so the menu stays clean for a
+// packaged app.
+function buildBackendControlItems(
+  onChange: () => void,
+): MenuItemConstructorOptions[] {
+  if (!backendAutostartAvailable()) return [];
+
+  return [
+    {
+      label: 'Start backend at login',
+      type: 'checkbox',
+      checked: isBackendLaunchAgentInstalled(),
+      click: (item) => {
+        if (item.checked) installBackendLaunchAgent(console.log);
+        else uninstallBackendLaunchAgent(console.log);
+        onChange();
+      },
+    },
+    {
+      label: 'Start backend now',
+      click: () => {
+        runBackendAutostartNow(console.log);
+      },
+    },
+  ];
 }
 
 function buildDetectedCallItems(

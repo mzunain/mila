@@ -1,7 +1,8 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { Logger, ValidationPipe } from '@nestjs/common';
 import { WsAdapter } from '@nestjs/platform-ws';
 import { AppModule } from './app.module';
+import { resolveAsrMode } from './asr-config';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
@@ -42,6 +43,13 @@ async function bootstrap() {
   );
   app.useWebSocketAdapter(new WsAdapter(app));
   app.setGlobalPrefix('api');
+
+  // Make a demo/mock ASR fallback impossible to miss: a misconfigured deploy
+  // would otherwise silently serve simulated transcripts as if they were real.
+  const asr = resolveAsrMode();
+  if (asr.hint) {
+    new Logger('Bootstrap').warn(asr.hint);
+  }
 
   const port = Number(process.env.API_PORT ?? process.env.PORT ?? 4000);
   await app.listen(port);

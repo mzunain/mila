@@ -13,7 +13,7 @@ export const APP_BUNDLE_ID = 'app.mila.desktop';
 export const ENTRY_PATH = '/app';
 
 export const DEV_URL =
-  process.env.MILA_DEV_URL ?? `http://localhost:3000${ENTRY_PATH}`;
+  process.env.MILA_DEV_URL ?? `http://localhost:7300${ENTRY_PATH}`;
 
 export const RESOURCES_DIR = isDev
   ? path.join(__dirname, '..')

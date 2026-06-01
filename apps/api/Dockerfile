@@ -32,12 +32,12 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 ENV NODE_ENV=production
-ENV API_PORT=4000
+ENV API_PORT=7400
 
 COPY --from=builder /out/node_modules ./node_modules
 COPY --from=builder /repo/apps/api/dist ./dist
 COPY --from=builder /repo/apps/api/prisma ./prisma
 COPY --from=builder /repo/apps/api/package.json ./package.json
 
-EXPOSE 4000
+EXPOSE 7400
 CMD ["sh", "-c", "node node_modules/prisma/build/index.js migrate deploy && node dist/main"]

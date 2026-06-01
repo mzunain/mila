@@ -20,7 +20,7 @@ export PATH="/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:${PATH:-}"
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILES=(-f "$ROOT_DIR/infra/docker-compose.yml" -f "$ROOT_DIR/infra/docker-compose.override.yml")
-HEALTH_URL="${MILA_HEALTH_URL:-http://localhost:4000/api/health}"
+HEALTH_URL="${MILA_HEALTH_URL:-http://localhost:7400/api/health}"
 LOG_DIR="${MILA_LOG_DIR:-$HOME/Library/Logs/mila}"
 RUNTIME_TIMEOUT="${MILA_RUNTIME_TIMEOUT:-120}" # seconds to wait for the daemon
 HEALTH_TIMEOUT="${MILA_HEALTH_TIMEOUT:-180}"   # seconds to wait for /api/health

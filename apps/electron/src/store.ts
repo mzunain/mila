@@ -19,8 +19,8 @@ export type Preferences = {
 };
 
 const DEFAULTS: Preferences = {
-  apiUrl: process.env.MILA_API_INTERNAL_URL ?? 'http://localhost:4000',
-  wsUrl: process.env.NEXT_PUBLIC_API_WS_URL ?? 'ws://localhost:4000/meetings/live',
+  apiUrl: process.env.MILA_API_INTERNAL_URL ?? 'http://localhost:7400',
+  wsUrl: process.env.NEXT_PUBLIC_API_WS_URL ?? 'ws://localhost:7400/meetings/live',
   startMinimized: false,
   launchAtLogin: true,
   launchAtLoginConfigured: false,
@@ -51,6 +51,17 @@ function load(): Preferences {
     if (parsed.launchAtLoginConfigured !== true) {
       next.launchAtLogin = true;
       next.launchAtLoginConfigured = true;
+      shouldPersist = true;
+    }
+    // Heal preferences persisted before the backend moved off :4000 → :7400.
+    // A stored URL still pointing at the retired port is stale config, not a
+    // deliberate choice, so snap it back to the current default.
+    if (next.apiUrl === 'http://localhost:4000') {
+      next.apiUrl = DEFAULTS.apiUrl;
+      shouldPersist = true;
+    }
+    if (next.wsUrl === 'ws://localhost:4000/meetings/live') {
+      next.wsUrl = DEFAULTS.wsUrl;
       shouldPersist = true;
     }
   } catch {

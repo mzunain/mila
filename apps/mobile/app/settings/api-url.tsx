@@ -31,7 +31,7 @@ export default function ApiUrlScreen() {
     const url = value.trim();
     if (!isValidHttpUrl(url)) {
       setStatus("error");
-      setMessage("Use a full URL like http://192.168.1.5:4000 or https://api.example.com");
+      setMessage("Use a full URL like http://192.168.1.5:7400 or https://api.example.com");
       return;
     }
     setStatus("saving");
@@ -94,7 +94,7 @@ export default function ApiUrlScreen() {
               setStatus("idle");
               setMessage(null);
             }}
-            placeholder="http://localhost:4000"
+            placeholder="http://localhost:7400"
             placeholderTextColor="#475569"
             autoCapitalize="none"
             autoCorrect={false}

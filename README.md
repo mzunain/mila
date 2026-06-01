@@ -16,7 +16,7 @@ NVIDIA NIM), and ships as a desktop app (Electron) plus a web UI.
 ```
 
 The desktop app is a thin client. You always need a backend reachable at
-`http://localhost:4000`. For source development, the easiest entrypoint is
+`http://localhost:7400`. For source development, the easiest entrypoint is
 `./run.sh`.
 
 ## Run locally in one command
@@ -38,8 +38,8 @@ Open:
 
 | Service | URL |
 | ------- | --- |
-| Web UI  | http://localhost:3000 |
-| API     | http://localhost:4000/api/health |
+| Web UI  | http://localhost:7300 |
+| API     | http://localhost:7400/api/health |
 
 Useful follow-up commands:
 
@@ -80,7 +80,7 @@ Run it once by hand to verify before relying on it at login:
 
 ```bash
 scripts/mila-autostart.sh
-curl http://localhost:4000/api/health
+curl http://localhost:7400/api/health
 ```
 
 > First run after pulling new code can be slow while images build. Run `./run.sh`
@@ -104,7 +104,7 @@ That brings up four services:
 
 | Service     | Port (host) | Notes                              |
 | ----------- | ----------- | ---------------------------------- |
-| `api`       | 4000        | NestJS, applies Prisma migrations  |
+| `api`       | 7400        | NestJS, applies Prisma migrations  |
 | `postgres`  | 15432       | pgvector/pg17, volume `mila-postgres` |
 | `redis`     | 16379       | Cache / pubsub                     |
 | `asr-worker`| 9000        | faster-whisper, `small` by default |
@@ -112,12 +112,12 @@ That brings up four services:
 Verify:
 
 ```bash
-curl http://localhost:4000/api/capabilities
+curl http://localhost:7400/api/capabilities
 # → {"asrProvider":"http","supportsRealAudio":true, ...}
 ```
 
 Now download Mila.app (or run `pnpm dev:desktop` from source) and it will
-connect to the backend at `localhost:4000`.
+connect to the backend at `localhost:7400`.
 
 To stop everything: `docker compose down`. To wipe data too: `docker compose
 down -v`.

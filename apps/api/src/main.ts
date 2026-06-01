@@ -12,12 +12,12 @@ async function bootstrap() {
       origin: string | undefined,
       callback: (err: Error | null, allow?: boolean) => void,
     ) => {
-      const webOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:3000';
+      const webOrigin = process.env.WEB_ORIGIN ?? 'http://localhost:7300';
       const allowedOrigins = new Set([
         webOrigin,
-        'http://localhost:3000',
-        'http://localhost:3001',
-        'http://localhost:3002',
+        'http://localhost:7300',
+        'http://localhost:7301',
+        'http://localhost:7302',
       ]);
 
       if (
@@ -51,7 +51,7 @@ async function bootstrap() {
     new Logger('Bootstrap').warn(asr.hint);
   }
 
-  const port = Number(process.env.API_PORT ?? process.env.PORT ?? 4000);
+  const port = Number(process.env.API_PORT ?? process.env.PORT ?? 7400);
   await app.listen(port);
 }
 void bootstrap();

@@ -131,7 +131,7 @@ export function clearPreferences() {
 // A hosted browser deploy can set NEXT_PUBLIC_API_BASE_URL to bypass the BFF.
 const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 const DEFAULT_WS_URL =
-  process.env.NEXT_PUBLIC_API_WS_URL ?? "ws://localhost:4000/meetings/live";
+  process.env.NEXT_PUBLIC_API_WS_URL ?? "ws://localhost:7400/meetings/live";
 
 export function resolveApiUrl(preferences: Preferences): string {
   const trimmed = preferences.apiUrl.trim().replace(/\/$/, "");

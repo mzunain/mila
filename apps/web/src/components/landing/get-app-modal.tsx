@@ -57,16 +57,16 @@ function GetAppModalContent({
     >
       <button
         type="button"
-        aria-label="Close"
+        aria-label="Dismiss modal backdrop"
         onClick={onClose}
         className="absolute inset-0 cursor-default bg-black/70 backdrop-blur-sm"
       />
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-white/10 bg-[#101821] shadow-2xl shadow-black/50">
+      <div className="relative w-full max-w-md overflow-hidden rounded-lg border border-[#e2ded6] bg-[#fbfaf7] shadow-2xl shadow-black/30">
         <button
           type="button"
           onClick={onClose}
-          className="absolute right-4 top-4 grid h-8 w-8 place-items-center rounded-md text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
-          aria-label="Close"
+          className="absolute right-4 top-4 grid h-8 w-8 place-items-center rounded-md text-[#625f59] transition hover:bg-[#e6f8fb] hover:text-[#151411]"
+          aria-label="Close download modal"
         >
           <X size={16} />
         </button>
@@ -91,15 +91,15 @@ function DesktopContent({ platform }: { platform: "mac" | "windows" }) {
 
   return (
     <div className="p-7">
-      <div className="grid h-14 w-14 place-items-center rounded-xl bg-gradient-to-br from-emerald-300/20 to-cyan-400/20 text-emerald-200">
+      <div className="grid h-14 w-14 place-items-center rounded-md bg-[#e6f8fb] text-[#0e7490]">
         <Icon size={22} />
       </div>
-      <h2 className="mt-5 text-xl font-semibold text-white">Get Mila for {label}</h2>
-      <p className="mt-2 text-sm text-slate-400">{fileNote}</p>
+      <h2 className="mt-5 text-xl font-semibold text-[#151411]">Get Mila for {label}</h2>
+      <p className="mt-2 text-sm text-[#625f59]">{fileNote}</p>
 
       <a
         href={links.primary}
-        className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-md bg-emerald-300 px-4 py-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
+        className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#0e7490] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#155e75]"
       >
         <Download size={15} />
         Download Mila
@@ -110,24 +110,24 @@ function DesktopContent({ platform }: { platform: "mac" | "windows" }) {
           href={links.secondary}
           target="_blank"
           rel="noreferrer noopener"
-          className="mt-3 block text-center text-xs text-slate-400 transition hover:text-white"
+          className="mt-3 block text-center text-xs text-[#625f59] transition hover:text-[#0e7490]"
         >
           All releases & checksums →
         </a>
       )}
 
-      <ul className="mt-6 space-y-2 border-t border-white/10 pt-5 text-xs text-slate-400">
+      <ul className="mt-6 space-y-2 border-t border-[#e2ded6] pt-5 text-xs text-[#625f59]">
         <li className="flex items-center gap-2">
-          <Check size={12} className="text-emerald-300" />
+          <Check size={12} className="text-[#0e7490]" />
           Captures system audio — no meeting bots
         </li>
         <li className="flex items-center gap-2">
-          <Check size={12} className="text-emerald-300" />
+          <Check size={12} className="text-[#0e7490]" />
           Auto-updates in the background
         </li>
         <li className="flex items-center gap-2">
-          <Check size={12} className="text-emerald-300" />
-          Works offline with on-device transcription
+          <Check size={12} className="text-[#0e7490]" />
+          Connects to your local or hosted Mila backend
         </li>
       </ul>
     </div>
@@ -144,22 +144,22 @@ function MobileContent({ platform }: { platform: "ios" | "android" }) {
 
   return (
     <div className="p-7">
-      <div className="grid h-14 w-14 place-items-center rounded-xl bg-gradient-to-br from-emerald-300/20 to-cyan-400/20 text-emerald-200">
+      <div className="grid h-14 w-14 place-items-center rounded-md bg-[#e6f8fb] text-[#0e7490]">
         <Smartphone size={22} />
       </div>
-      <h2 className="mt-5 text-xl font-semibold text-white">Get Mila for {label}</h2>
-      <p className="mt-2 text-sm text-slate-400">
+      <h2 className="mt-5 text-xl font-semibold text-[#151411]">Get Mila for {label}</h2>
+      <p className="mt-2 text-sm text-[#625f59]">
         Scan the QR code, or send yourself a one-tap link.
       </p>
 
-      <div className="mt-5 grid grid-cols-2 gap-1 rounded-lg border border-white/10 bg-white/[0.03] p-1">
+      <div className="mt-5 grid grid-cols-2 gap-1 rounded-lg border border-[#e2ded6] bg-white p-1">
         <button
           type="button"
           onClick={() => setTab("qr")}
           className={
             tab === "qr"
-              ? "flex items-center justify-center gap-1.5 rounded-md bg-white/[0.07] px-3 py-1.5 text-xs font-medium text-white"
-              : "flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-slate-400 transition hover:text-white"
+              ? "flex items-center justify-center gap-1.5 rounded-md bg-[#e6f8fb] px-3 py-1.5 text-xs font-medium text-[#0e7490]"
+              : "flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-[#625f59] transition hover:text-[#151411]"
           }
         >
           <QrCode size={12} /> QR code
@@ -169,8 +169,8 @@ function MobileContent({ platform }: { platform: "ios" | "android" }) {
           onClick={() => setTab("email")}
           className={
             tab === "email"
-              ? "flex items-center justify-center gap-1.5 rounded-md bg-white/[0.07] px-3 py-1.5 text-xs font-medium text-white"
-              : "flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-slate-400 transition hover:text-white"
+              ? "flex items-center justify-center gap-1.5 rounded-md bg-[#e6f8fb] px-3 py-1.5 text-xs font-medium text-[#0e7490]"
+              : "flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-[#625f59] transition hover:text-[#151411]"
           }
         >
           <Mail size={12} /> Email me a link
@@ -178,9 +178,9 @@ function MobileContent({ platform }: { platform: "ios" | "android" }) {
       </div>
 
       {tab === "qr" ? (
-        <div className="mt-5 grid place-items-center rounded-lg border border-white/10 bg-white/[0.03] px-6 py-8">
+        <div className="mt-5 grid place-items-center rounded-lg border border-[#e2ded6] bg-white px-6 py-8">
           <QrPlaceholder link={link} />
-          <p className="mt-4 max-w-[16rem] text-center text-xs text-slate-400">
+          <p className="mt-4 max-w-[16rem] text-center text-xs text-[#625f59]">
             Open your camera and point it at the code to install from the {store}.
           </p>
         </div>
@@ -199,16 +199,16 @@ function MobileContent({ platform }: { platform: "ios" | "android" }) {
             value={email}
             onChange={(event) => setEmail(event.target.value)}
             placeholder="you@example.com"
-            className="w-full rounded-md border border-white/10 bg-[#0d131b] px-3 py-2.5 text-sm text-white outline-none focus:border-emerald-400"
+            className="w-full rounded-md border border-[#c8d7d9] bg-white px-3 py-2.5 text-sm text-[#151411] outline-none focus:border-[#0e7490]"
           />
           <button
             type="submit"
-            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-emerald-300 px-4 py-2.5 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200"
+            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#0e7490] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#155e75]"
           >
             <Mail size={14} />
             {emailed ? "Sent — check your inbox" : "Send me the install link"}
           </button>
-          <p className="text-center text-xs text-slate-500">
+          <p className="text-center text-xs text-[#72777d]">
             We&apos;ll send one link, then forget your email.
           </p>
         </form>
@@ -218,7 +218,7 @@ function MobileContent({ platform }: { platform: "ios" | "android" }) {
         href={link}
         target="_blank"
         rel="noreferrer noopener"
-        className="mt-5 block text-center text-xs text-slate-400 transition hover:text-white"
+        className="mt-5 block text-center text-xs text-[#625f59] transition hover:text-[#0e7490]"
       >
         Open the {store} →
       </a>

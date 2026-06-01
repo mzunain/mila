@@ -128,6 +128,9 @@ interface AppCapabilities {
   supportsRealAudio: boolean;
   supportsDemoAudio: boolean;
   supportedInputs: string[];
+  // Operator-facing guidance the API returns when ASR is in demo mode; tells
+  // the user how to switch on real transcription. Absent when real audio works.
+  realAudioHint?: string | null;
 }
 
 interface MeetingSessionDetail {
@@ -1493,7 +1496,8 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
               >
                 {capabilities.supportsRealAudio
                   ? "Real audio transcription is ready."
-                  : "Demo mode only. Real mic, upload, Zoom, Meet, and calls need a real ASR worker."}
+                  : capabilities.realAudioHint ??
+                    "Demo mode only. Real mic, upload, Zoom, Meet, and calls need a real ASR worker."}
               </p>
             </div>
 

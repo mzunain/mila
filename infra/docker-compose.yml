@@ -68,6 +68,11 @@ services:
       API_PORT: 4000
       DATABASE_URL: postgresql://mila:mila@postgres:5432/mila
       REDIS_URL: redis://redis:6379
+      # The asr-worker is always a dependency of this stack, so the containerised
+      # API must always use the real (http) ASR provider. Pin it here rather than
+      # relying on root .env — that keeps the auto-started backend from silently
+      # falling back to simulated "mock" transcripts if .env drifts or is absent.
+      ASR_PROVIDER: http
       ASR_BASE_URL: http://asr-worker:9000
 
 volumes:

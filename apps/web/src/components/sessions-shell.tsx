@@ -30,9 +30,9 @@ export function SessionsShell({ user, children }: SessionsShellProps) {
   }, []);
 
   return (
-    <main className="min-h-screen bg-[#0e1116] text-slate-100">
-      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[280px_1fr]">
-        <aside className="border-b border-white/10 bg-[#101821] px-5 py-5 lg:border-b-0 lg:border-r">
+    <main className="mila-app-bg min-h-screen lg:h-screen lg:overflow-hidden">
+      <div className="grid min-h-screen grid-cols-1 lg:h-screen lg:min-h-0 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className="mila-sidebar border-b px-5 pb-5 pt-[calc(1.25rem+var(--mila-window-top-offset))] lg:h-full lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <BrandLogo />
           <AccountCard user={user} />
           <WorkspaceNav className="mt-5" />
@@ -40,16 +40,18 @@ export function SessionsShell({ user, children }: SessionsShellProps) {
             <button
               type="button"
               onClick={() => setCommandOpen(true)}
-              className="flex w-full items-center justify-between gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-slate-400 transition hover:bg-white/[0.07] hover:text-white"
+              className="mila-secondary flex w-full items-center justify-between gap-2 rounded-lg border px-3 py-2 text-xs transition"
             >
               <span>Quick actions</span>
-              <span className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[10px]">
+              <span className="mila-chip inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]">
                 <Command size={10} /> K
               </span>
             </button>
           </div>
         </aside>
-        <section className="min-w-0">{children}</section>
+        <section className="mila-content-bg min-w-0 lg:h-full lg:min-h-0 lg:overflow-y-auto">
+          {children}
+        </section>
       </div>
       <CommandPalette
         open={commandOpen}

@@ -10,8 +10,12 @@ export function BrandLogo({ compact = false }: BrandLogoProps) {
       <Image src="/mila-mark.svg" alt="Mila" width={36} height={36} priority />
       {!compact && (
         <div className="leading-none">
-          <div className="text-[1.05rem] font-semibold tracking-normal text-white">Mila</div>
-          <div className="mt-1 text-xs font-medium text-slate-400">Multilingual meeting memory</div>
+          <div className="text-[1.05rem] font-semibold tracking-normal text-[var(--foreground)]">
+            Mila
+          </div>
+          <div className="mila-muted mt-1 text-xs font-medium">
+            Multilingual meeting memory
+          </div>
         </div>
       )}
     </div>

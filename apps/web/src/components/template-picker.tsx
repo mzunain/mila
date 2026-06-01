@@ -41,14 +41,14 @@ export function TemplatePicker({ value, onChange, disabled }: TemplatePickerProp
 
   return (
     <div ref={containerRef} className="relative">
-      <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+      <label className="mila-eyebrow">
         Template
       </label>
       <button
         type="button"
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
-        className="mt-2 flex w-full items-center justify-between gap-2 rounded-md border border-white/10 bg-[#0d131b] px-3 py-2 text-sm text-white outline-none transition focus:border-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
+        className="mila-focus mt-2 flex w-full items-center justify-between gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--foreground)] outline-none transition disabled:cursor-not-allowed disabled:opacity-50"
       >
         <span className="inline-flex items-center gap-2 truncate">
           <span aria-hidden className="text-base leading-none">
@@ -58,11 +58,11 @@ export function TemplatePicker({ value, onChange, disabled }: TemplatePickerProp
         </span>
         <ChevronDown
           size={14}
-          className={`shrink-0 text-slate-500 transition ${open ? "rotate-180" : ""}`}
+          className={`shrink-0 text-[var(--muted-soft)] transition ${open ? "rotate-180" : ""}`}
         />
       </button>
       {open && (
-        <div className="absolute left-0 right-0 z-30 mt-2 max-h-80 overflow-y-auto rounded-md border border-white/10 bg-[#121922] p-1 shadow-xl">
+        <div className="mila-surface-raised absolute left-0 right-0 z-30 mt-2 max-h-80 overflow-y-auto rounded-lg border p-1 shadow-xl">
           {meetingTemplates.map((template) => {
             const selected = template.id === active.id;
             return (
@@ -75,8 +75,8 @@ export function TemplatePicker({ value, onChange, disabled }: TemplatePickerProp
                 }}
                 className={
                   selected
-                    ? "flex w-full items-start gap-3 rounded px-3 py-2 text-left text-sm transition bg-emerald-300/10 text-white"
-                    : "flex w-full items-start gap-3 rounded px-3 py-2 text-left text-sm transition text-slate-300 hover:bg-white/[0.04] hover:text-white"
+                    ? "flex w-full items-start gap-3 rounded-md bg-[var(--accent-faint)] px-3 py-2 text-left text-sm text-[var(--foreground)] transition"
+                    : "mila-muted flex w-full items-start gap-3 rounded-md px-3 py-2 text-left text-sm transition hover:bg-white/[0.05] hover:text-[var(--foreground)]"
                 }
               >
                 <span aria-hidden className="mt-0.5 text-base leading-none">
@@ -84,7 +84,7 @@ export function TemplatePicker({ value, onChange, disabled }: TemplatePickerProp
                 </span>
                 <span className="flex min-w-0 flex-col gap-0.5">
                   <span className="truncate font-medium">{template.name}</span>
-                  <span className="text-xs leading-5 text-slate-500">
+                  <span className="mila-muted text-xs leading-5">
                     {template.description}
                   </span>
                 </span>
@@ -93,7 +93,7 @@ export function TemplatePicker({ value, onChange, disabled }: TemplatePickerProp
           })}
         </div>
       )}
-      <p className="mt-1.5 text-[11px] leading-4 text-slate-500">
+      <p className="mila-muted mt-1.5 text-[11px] leading-4">
         {active.description}
       </p>
     </div>

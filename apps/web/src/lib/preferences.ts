@@ -3,14 +3,33 @@
 import { useMemo, useSyncExternalStore } from "react";
 
 export type Theme = "dark" | "light" | "system";
+export type LinkSharing = "private" | "workspace" | "public";
+export type TranscriptRetention = "off" | "30d" | "90d" | "1y";
 
 export interface Preferences {
   theme: Theme;
   outputLanguage: string;
+  transcriptionLanguage: string;
+  summaryLanguage: string;
   apiUrl: string;
   wsUrl: string;
   autoLaunch: boolean;
+  liveMeetingIndicator: boolean;
+  moveAsideInMeetings: boolean;
+  openSharedLinksInDesktop: boolean;
+  useDataForModelImprovement: boolean;
+  transcriptRetention: TranscriptRetention;
+  defaultLinkSharing: LinkSharing;
   shareableLinksDefault: boolean;
+  internalJargon: string;
+  scheduledMeetingNotifications: boolean;
+  autoDetectedMeetingNotifications: boolean;
+  mutedMeetingApps: string[];
+  marketingEmails: boolean;
+  showUpcomingInMenuBar: boolean;
+  showEventsWithoutParticipants: boolean;
+  visibleCalendars: Record<string, boolean>;
+  workspaceName: string;
 }
 
 export const STORAGE_KEY = "mila:preferences";
@@ -18,10 +37,27 @@ export const STORAGE_KEY = "mila:preferences";
 export const defaultPreferences: Preferences = {
   theme: "dark",
   outputLanguage: "en",
+  transcriptionLanguage: "en",
+  summaryLanguage: "en",
   apiUrl: "",
   wsUrl: "",
   autoLaunch: true,
+  liveMeetingIndicator: true,
+  moveAsideInMeetings: true,
+  openSharedLinksInDesktop: true,
+  useDataForModelImprovement: false,
+  transcriptRetention: "off",
+  defaultLinkSharing: "workspace",
   shareableLinksDefault: false,
+  internalJargon: "",
+  scheduledMeetingNotifications: true,
+  autoDetectedMeetingNotifications: true,
+  mutedMeetingApps: [],
+  marketingEmails: true,
+  showUpcomingInMenuBar: true,
+  showEventsWithoutParticipants: true,
+  visibleCalendars: {},
+  workspaceName: "Mila workspace",
 };
 
 let cachedSnapshot: string | null = null;

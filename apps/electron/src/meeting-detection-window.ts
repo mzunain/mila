@@ -158,53 +158,49 @@ function renderDetectionHtml(meeting: DetectedMeeting) {
   .toast {
     height: 44px;
     display: grid;
-    grid-template-columns: 7px minmax(0, 1fr) 144px;
+    grid-template-columns: 28px minmax(0, 1fr) auto 26px;
     align-items: center;
-    gap: 9px;
-    border: 1px solid rgba(255, 255, 255, 0.14);
-    border-radius: 14px;
-    background: rgba(31, 34, 35, 0.94);
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
+    gap: 10px;
+    border: 1px solid rgba(255, 255, 255, 0.10);
+    border-radius: 15px;
+    background: rgba(28, 30, 32, 0.92);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.42);
+    backdrop-filter: blur(20px) saturate(140%);
+    -webkit-backdrop-filter: blur(20px) saturate(140%);
     color: #f7f4ef;
-    padding: 6px 7px 6px 11px;
+    padding: 0 8px;
   }
-  .grip {
-    width: 6px;
+  .mark {
+    width: 28px;
     height: 28px;
-    border-radius: 999px;
-    border: 1px dashed rgba(255,255,255,0.16);
-    opacity: 0.8;
+    border-radius: 8px;
+    display: grid;
+    place-items: center;
+    background: linear-gradient(135deg, #67e8f9, #65f4b8);
+    color: #041012;
+    font-weight: 900;
+    font-size: 12px;
+    letter-spacing: -0.02em;
+    box-shadow: inset 0 -6px 14px rgba(0,0,0,0.16);
   }
   .copy { min-width: 0; }
   .title {
     font-size: 13px;
-    font-weight: 620;
-    letter-spacing: 0;
-    line-height: 1.1;
+    font-weight: 600;
+    line-height: 1.15;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .provider {
     margin-top: 1px;
-    color: rgba(247,244,239,0.68);
+    color: rgba(247,244,239,0.60);
     font-size: 11px;
     font-weight: 500;
     line-height: 1.15;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .actions {
-    height: 36px;
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 30px;
-    border: 1px solid rgba(255, 255, 255, 0.16);
-    border-radius: 11px;
-    overflow: hidden;
-    background: rgba(255,255,255,0.04);
   }
   a {
     color: inherit;
@@ -213,55 +209,45 @@ function renderDetectionHtml(meeting: DetectedMeeting) {
     user-select: none;
   }
   .take {
-    display: flex;
+    display: inline-flex;
     align-items: center;
-    gap: 7px;
-    min-width: 0;
-    padding: 0 8px;
-    font-size: 13px;
-    font-weight: 620;
+    height: 30px;
+    padding: 0 13px;
+    border-radius: 9px;
+    background: rgba(255,255,255,0.10);
+    border: 1px solid rgba(255,255,255,0.10);
+    font-size: 12.5px;
+    font-weight: 600;
     white-space: nowrap;
+    transition: background 120ms ease, border-color 120ms ease;
   }
-  .take-label {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .mark {
+  .take:hover { background: rgba(255,255,255,0.17); border-color: rgba(255,255,255,0.20); }
+  .take:active { background: rgba(255,255,255,0.09); }
+  .close {
     width: 26px;
     height: 26px;
-    border-radius: 8px;
+    border-radius: 999px;
     display: grid;
     place-items: center;
-    background: linear-gradient(135deg, #67e8f9, #65f4b8);
-    color: #041012;
-    font-weight: 900;
-    font-size: 11px;
-    box-shadow: inset 0 -7px 16px rgba(0,0,0,0.14);
+    color: rgba(247,244,239,0.55);
+    transition: background 120ms ease, color 120ms ease;
   }
-  .more {
-    display: grid;
-    place-items: center;
-    border-left: 1px solid rgba(255,255,255,0.16);
-    font-size: 14px;
-    color: rgba(247,244,239,0.86);
-  }
+  .close:hover { background: rgba(255,255,255,0.12); color: #f7f4ef; }
+  .close:active { background: rgba(255,255,255,0.06); }
+  .close svg { width: 11px; height: 11px; display: block; }
 </style>
 </head>
 <body>
   <main class="toast">
-    <div class="grip"></div>
+    <span class="mark" aria-hidden="true">M</span>
     <section class="copy">
       <div class="title">${escapeHtml(copy.title)}</div>
       <div class="provider">${escapeHtml(copy.providerLabel)}</div>
     </section>
-    <section class="actions">
-      <a class="take" href="mila-detected://take-notes" target="_blank" data-action="take-notes">
-        <span class="mark">M</span>
-        <span class="take-label">${escapeHtml(copy.takeNotesLabel)}</span>
-      </a>
-      <a class="more" href="mila-detected://ignore" target="_blank" data-action="ignore" title="${escapeHtml(copy.ignoreLabel)}">⌄</a>
-    </section>
+    <a class="take" href="mila-detected://take-notes" target="_blank" data-action="take-notes">${escapeHtml(copy.takeNotesLabel)}</a>
+    <a class="close" href="mila-detected://ignore" target="_blank" data-action="ignore" title="${escapeHtml(copy.ignoreLabel)}" aria-label="${escapeHtml(copy.ignoreLabel)}">
+      <svg viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M2.6 2.6l6.8 6.8M9.4 2.6l-6.8 6.8" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+    </a>
   </main>
   <script>
     document.addEventListener('click', (event) => {

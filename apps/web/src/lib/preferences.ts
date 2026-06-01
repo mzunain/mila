@@ -90,13 +90,31 @@ function getServerSnapshot() {
   return "";
 }
 
+// The backend moved off :4000 (web 3000→7300, api 4000→7400). A preference
+// persisted before that move can still pin apiUrl/wsUrl to the retired port;
+// that is stale config, not a deliberate choice, so we drop it back to the
+// current default on read instead of letting the renderer dial a dead port.
+const RETIRED_API_URL = "http://localhost:4000";
+const RETIRED_WS_URL = "ws://localhost:4000/meetings/live";
+
+function healRetiredPorts(preferences: Preferences): Preferences {
+  let healed = preferences;
+  if (healed.apiUrl.trim().replace(/\/$/, "") === RETIRED_API_URL) {
+    healed = { ...healed, apiUrl: "" };
+  }
+  if (healed.wsUrl.trim() === RETIRED_WS_URL) {
+    healed = { ...healed, wsUrl: "" };
+  }
+  return healed;
+}
+
 function parsePreferences(raw: string): Preferences {
   if (!raw) return defaultPreferences;
   try {
-    return {
+    return healRetiredPorts({
       ...defaultPreferences,
       ...(JSON.parse(raw) as Partial<Preferences>),
-    };
+    });
   } catch {
     return defaultPreferences;
   }
@@ -134,6 +152,15 @@ const DEFAULT_WS_URL =
   process.env.NEXT_PUBLIC_API_WS_URL ?? "ws://localhost:7400/meetings/live";
 
 export function resolveApiUrl(preferences: Preferences): string {
+  // In the desktop shell every HTTP call goes through the same-origin embedded
+  // BFF (the Next route handlers proxy to MILA_API_INTERNAL_URL server-side).
+  // The renderer is served from a random http://127.0.0.1:<port> origin that the
+  // API's CORS allowlist does not include, so a direct renderer→backend call is
+  // blocked. Force relative so we always use the BFF, regardless of whatever
+  // apiUrl a previous build may have synced from the native store.
+  if (typeof window !== "undefined" && "mila" in window) {
+    return "";
+  }
   const trimmed = preferences.apiUrl.trim().replace(/\/$/, "");
   return trimmed || DEFAULT_API_URL;
 }

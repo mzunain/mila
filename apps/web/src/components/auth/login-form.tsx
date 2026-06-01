@@ -35,7 +35,7 @@ export function LoginForm() {
       <button
         type="submit"
         disabled={pending}
-        className="w-full rounded-md bg-emerald-500 px-4 py-2 text-sm font-semibold text-emerald-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+        className="mila-primary w-full rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-70"
       >
         {pending ? "Signing in…" : "Sign in"}
       </button>
@@ -54,7 +54,7 @@ interface FieldProps {
 function Field({ id, label, type, autoComplete, error }: FieldProps) {
   return (
     <label htmlFor={id} className="block space-y-1.5">
-      <span className="text-xs font-medium uppercase tracking-wide text-slate-400">
+      <span className="mila-eyebrow text-xs">
         {label}
       </span>
       <input
@@ -63,7 +63,7 @@ function Field({ id, label, type, autoComplete, error }: FieldProps) {
         type={type}
         autoComplete={autoComplete}
         required
-        className="w-full rounded-md border border-white/10 bg-[#0e1116] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400 focus:ring-1 focus:ring-emerald-400"
+        className="mila-focus w-full rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--foreground)] outline-none"
       />
       {error ? <span className="text-xs text-rose-300">{error}</span> : null}
     </label>

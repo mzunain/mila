@@ -167,6 +167,16 @@ type AssistDesktopBridge = {
   };
 };
 
+// On a real call the other participants come out of the speakers, not the mic —
+// with headphones the mic never hears them at all. The desktop shell answers
+// `getDisplayMedia({ audio })` with system-audio loopback (ScreenCaptureKit), so
+// when this bridge reports support we mix that system feed in alongside the mic.
+type CaptureDesktopBridge = {
+  loopback?: {
+    isSupported: () => Promise<boolean>;
+  };
+};
+
 export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const { preferences } = usePreferences();
   const apiHttpUrl = useMemo(() => resolveApiUrl(preferences), [preferences]);
@@ -223,8 +233,10 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const sessionRef = useRef<MeetingSession | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const systemStreamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
+  const systemSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const audioSinkRef = useRef<GainNode | null>(null);
   const micFlushIntervalRef = useRef<number | null>(null);
@@ -513,6 +525,9 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       audioSourceRef.current?.disconnect();
       audioSourceRef.current = null;
 
+      systemSourceRef.current?.disconnect();
+      systemSourceRef.current = null;
+
       audioSinkRef.current?.disconnect();
       audioSinkRef.current = null;
 
@@ -525,6 +540,9 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
       streamRef.current?.getTracks().forEach((track) => track.stop());
       streamRef.current = null;
+
+      systemStreamRef.current?.getTracks().forEach((track) => track.stop());
+      systemStreamRef.current = null;
 
       if (clearBufferedAudio) {
         resetPcmBuffer();
@@ -772,6 +790,32 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     [],
   );
 
+  // Acquire the desktop system-audio loopback feed (the remote participants), or
+  // null when unavailable so capture degrades to mic-only. The Electron shell
+  // answers getDisplayMedia with a loopback audio track; keep only that track and
+  // never hold the screen-video track it may also hand back.
+  const acquireSystemAudioStream =
+    useCallback(async (): Promise<MediaStream | null> => {
+      try {
+        const bridge = (window as Window & { mila?: CaptureDesktopBridge }).mila;
+        const supported = await bridge?.loopback?.isSupported?.();
+        if (!supported) return null;
+        if (!navigator.mediaDevices?.getDisplayMedia) return null;
+        const display = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+        display.getVideoTracks().forEach((track) => track.stop());
+        if (display.getAudioTracks().length === 0) {
+          display.getTracks().forEach((track) => track.stop());
+          return null;
+        }
+        return display;
+      } catch {
+        return null;
+      }
+    }, []);
+
   const attachMicrophone = useCallback(
     async (meetingSession: MeetingSession, socket: WebSocket) => {
       if (!navigator.mediaDevices?.getUserMedia) {
@@ -790,18 +834,25 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
         throw new Error("Web Audio microphone streaming is not available");
       }
 
+      // Best-effort system-audio loopback so the transcript hears the other
+      // participants (who arrive through the speakers), not just this mic. Null
+      // off the desktop shell, when unsupported, or when the OS screen-recording
+      // grant is missing — capture then stays mic-only instead of failing.
+      const systemStream = await acquireSystemAudioStream();
+      systemStreamRef.current = systemStream;
+
       const audioContext = new AudioContextConstructor();
       if (audioContext.state === "suspended") {
         await audioContext.resume();
       }
-      const source = audioContext.createMediaStreamSource(stream);
+      const micSource = audioContext.createMediaStreamSource(stream);
       const processor = audioContext.createScriptProcessor(4096, 1, 1);
       const sink = audioContext.createGain();
       sink.gain.value = 0;
 
       audioContextRef.current = audioContext;
       audioSampleRateRef.current = audioContext.sampleRate;
-      audioSourceRef.current = source;
+      audioSourceRef.current = micSource;
       audioProcessorRef.current = processor;
       audioSinkRef.current = sink;
 
@@ -813,7 +864,14 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
         pcmBufferLengthRef.current += chunk.length;
       };
 
-      source.connect(processor);
+      // Fan both feeds into the one processor — Web Audio sums them, so a single
+      // mono PCM stream carries mic + system audio downstream to the ASR worker.
+      micSource.connect(processor);
+      if (systemStream) {
+        const systemSource = audioContext.createMediaStreamSource(systemStream);
+        systemSourceRef.current = systemSource;
+        systemSource.connect(processor);
+      }
       processor.connect(sink);
       sink.connect(audioContext.destination);
 
@@ -826,7 +884,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       }, 5000);
       setStatus("recording");
     },
-    [flushMicrophoneChunk, resetPcmBuffer],
+    [acquireSystemAudioStream, flushMicrophoneChunk, resetPcmBuffer],
   );
 
   const startRecording = useCallback(async () => {

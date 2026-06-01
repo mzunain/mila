@@ -54,6 +54,38 @@ If `.env` was created for you, add at least one provider key such as
 `GOOGLE_API_KEY` or `OPENROUTER_API_KEY`; the app can boot without it, but
 chat and generated notes need a key.
 
+## Start the backend automatically at login (macOS)
+
+The desktop app launches itself at login, but it is a thin client — without the
+Docker backend up, sessions fail with a 500 and ASR falls back to mock. To make
+MILA start *completely* after a restart, install a LaunchAgent that brings the
+backend stack up headlessly when you log in:
+
+```bash
+scripts/install-launch-agent.sh      # install + start now
+scripts/uninstall-launch-agent.sh    # remove
+```
+
+What it does:
+
+- Writes `~/Library/LaunchAgents/com.mila.backend.plist` (`RunAtLoad`, plus a
+  30-minute `StartInterval` so a crashed runtime self-heals).
+- At login it runs `scripts/mila-autostart.sh`, which starts the container
+  runtime (Colima, or Docker Desktop as a fallback), then `compose up -d` the
+  full stack. The `api` container applies Prisma migrations on boot, so the
+  database is ready without an extra step.
+- Logs to `~/Library/Logs/mila/autostart.{out,err}.log`.
+
+Run it once by hand to verify before relying on it at login:
+
+```bash
+scripts/mila-autostart.sh
+curl http://localhost:4000/api/health
+```
+
+> First run after pulling new code can be slow while images build. Run `./run.sh`
+> once to pre-build; afterwards autostart only starts existing containers.
+
 ## Docker backend in one command
 
 Requirements: Docker Desktop (or Docker Engine) and at least one LLM API key.

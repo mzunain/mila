@@ -10,7 +10,11 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import type { CreateMeetingRequest, ShareLinkResponse } from '@mila/shared';
+import type {
+  CreateMeetingRequest,
+  MeetingNotes,
+  ShareLinkResponse,
+} from '@mila/shared';
 import { MeetingsService } from './meetings.service';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { CurrentUser } from '../auth/current-user.decorator';
@@ -41,6 +45,11 @@ export class MeetingsController {
     return this.meetingsService.listSessions(user.id);
   }
 
+  @Get('actions/inbox')
+  getActionInbox(@CurrentUser() user: PublicUser) {
+    return this.meetingsService.getActionInbox(user.id);
+  }
+
   @Get(':id')
   async getSession(
     @CurrentUser() user: PublicUser,
@@ -53,6 +62,14 @@ export class MeetingsController {
     }
 
     return session;
+  }
+
+  @Post(':id/complete')
+  completeSession(
+    @CurrentUser() user: PublicUser,
+    @Param('id', new ParseUUIDPipe()) id: string,
+  ): Promise<MeetingNotes> {
+    return this.meetingsService.completeSession(user.id, id);
   }
 
   @Post(':id/share')

@@ -4,6 +4,7 @@ import { MeetingsGateway } from './meetings.gateway';
 import { MeetingsService } from './meetings.service';
 import { ShareController } from './share.controller';
 import { ASR_PROVIDER } from './providers/asr-provider.token';
+import { DemoAwareAsrProvider } from './providers/demo-aware-asr.provider';
 import { HttpAsrProvider } from './providers/http-asr.provider';
 import { MockAsrProvider } from './providers/mock-asr.provider';
 import { NotesEngineService } from './notes-engine.service';
@@ -14,11 +15,11 @@ const asrProviderFactory = {
     mockAsrProvider: MockAsrProvider,
     httpAsrProvider: HttpAsrProvider,
   ) => {
-    if (process.env.ASR_PROVIDER === 'http') {
-      return httpAsrProvider;
-    }
-
-    return mockAsrProvider;
+    return new DemoAwareAsrProvider(
+      mockAsrProvider,
+      httpAsrProvider,
+      process.env.ASR_PROVIDER === 'http',
+    );
   },
   inject: [MockAsrProvider, HttpAsrProvider],
 };

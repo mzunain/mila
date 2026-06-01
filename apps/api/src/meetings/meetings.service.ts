@@ -5,6 +5,8 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  buildMeetingActionInbox,
+  buildMeetingSessionPreview,
   createEmptyNotes,
   detectDirection,
   detectLanguage,
@@ -15,6 +17,7 @@ import type {
   CreateMeetingResponse,
   MeetingNotes,
   SupportedLanguageCode,
+  MeetingSessionListItem,
   MeetingSession,
   MeetingStatus,
   TranscriptSegment,
@@ -102,12 +105,39 @@ export class MeetingsService {
     };
   }
 
-  async listSessions(userId: string): Promise<MeetingSession[]> {
+  async listSessions(userId: string): Promise<MeetingSessionListItem[]> {
     const rows = await this.prisma.meetingSession.findMany({
       where: { userId },
       orderBy: { createdAt: 'desc' },
+      include: { notes: true },
     });
-    return rows.map((row) => this.toSession(row));
+    return rows.map((row) => ({
+      ...this.toSession(row),
+      notesPreview: row.notes
+        ? buildMeetingSessionPreview(this.toNotes(row.notes))
+        : undefined,
+    }));
+  }
+
+  async getActionInbox(userId: string) {
+    const rows = await this.prisma.meetingSession.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: { notes: true },
+    });
+
+    return buildMeetingActionInbox(
+      rows.flatMap((row) => {
+        if (!row.notes) return [];
+        return [
+          {
+            session: this.toSession(row),
+            notes: this.toNotes(row.notes),
+          },
+        ];
+      }),
+    );
   }
 
   async getSessionDetail(userId: string, sessionId: string) {

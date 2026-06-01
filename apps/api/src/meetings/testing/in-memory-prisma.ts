@@ -81,7 +81,12 @@ class MeetingSessionTable {
     return row;
   }
 
-  findMany(args?: { where?: Row; orderBy?: Row }): Promise<Row[]> {
+  findMany(args?: {
+    where?: Row;
+    orderBy?: Row;
+    take?: number;
+    include?: Include;
+  }): Promise<Row[]> {
     let rows = [...this.rows];
     if (args?.where) {
       rows = rows.filter((r) => matchWhere(r, args.where!));
@@ -94,7 +99,20 @@ class MeetingSessionTable {
         return dir === 'asc' ? av - bv : bv - av;
       });
     }
-    return Promise.resolve(rows.map((r) => ({ ...r })));
+    if (typeof args?.take === 'number') {
+      rows = rows.slice(0, args.take);
+    }
+    return Promise.resolve(
+      rows.map((r) => {
+        const out = { ...r };
+        if (args?.include?.notes) {
+          const notes =
+            this.notesTable.rows.find((n) => n.sessionId === r.id) ?? null;
+          out.notes = notes ? { ...notes } : null;
+        }
+        return out;
+      }),
+    );
   }
 }
 

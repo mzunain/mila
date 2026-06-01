@@ -1,5 +1,6 @@
 "use client";
 
+import type { LucideIcon } from "lucide-react";
 import { Apple, ArrowRight, Globe, Monitor, Smartphone } from "lucide-react";
 import { useState } from "react";
 import { GetAppModal, type Platform } from "./get-app-modal";
@@ -9,33 +10,33 @@ const platforms: Array<{
   name: string;
   tagline: string;
   cta: string;
-  icon: typeof Apple;
+  icon: LucideIcon;
 }> = [
   {
     id: "mac",
     name: "macOS",
-    tagline: "Native app · Apple silicon + Intel",
+    tagline: "Native desktop capture for Apple silicon and Intel.",
     cta: "Download .dmg",
     icon: Apple,
   },
   {
     id: "windows",
     name: "Windows",
-    tagline: "Native app · Windows 10 & 11",
+    tagline: "A focused app for Windows 10 and 11 workstations.",
     cta: "Download .exe",
     icon: Monitor,
   },
   {
     id: "ios",
     name: "iPhone",
-    tagline: "Capture meetings on the go",
+    tagline: "Review notes, action items, and shared links on the go.",
     cta: "Get on App Store",
     icon: Smartphone,
   },
   {
     id: "android",
     name: "Android",
-    tagline: "Capture meetings on the go",
+    tagline: "Carry the meeting memory with you after the call.",
     cta: "Get on Play Store",
     icon: Smartphone,
   },
@@ -58,30 +59,30 @@ export function PlatformGrid({ className }: PlatformGridProps) {
               key={platform.id}
               type="button"
               onClick={() => setOpenFor(platform.id)}
-              className="group flex flex-col items-start gap-3 rounded-xl border border-white/10 bg-[#0f141b] p-5 text-left transition hover:-translate-y-0.5 hover:border-emerald-400/40 hover:bg-[#121822]"
+              className="group flex min-h-[210px] flex-col items-start rounded-lg border border-[#e2ded6] bg-[#fbfaf7] p-5 text-left transition hover:-translate-y-0.5 hover:border-[#9dccd4] hover:shadow-xl hover:shadow-[#455a60]/10"
             >
-              <span className="grid h-10 w-10 place-items-center rounded-lg bg-gradient-to-br from-emerald-300/20 to-cyan-400/20 text-emerald-200">
-                <Icon size={18} />
+              <span className="grid h-11 w-11 place-items-center rounded-md bg-[#e6f8fb] text-[#0e7490]">
+                <Icon size={20} />
               </span>
-              <div>
-                <div className="text-base font-semibold text-white">
+              <div className="mt-5">
+                <div className="text-lg font-semibold text-[#151411]">
                   {platform.name}
                 </div>
-                <div className="mt-0.5 text-xs text-slate-400">
+                <div className="mt-2 text-sm leading-6 text-[#625f59]">
                   {platform.tagline}
                 </div>
               </div>
-              <span className="mt-auto inline-flex items-center gap-1 text-xs font-medium text-emerald-300">
+              <span className="mt-auto inline-flex items-center gap-1.5 pt-5 text-sm font-semibold text-[#0e7490]">
                 {platform.cta}
-                <ArrowRight size={11} className="transition group-hover:translate-x-0.5" />
+                <ArrowRight size={14} className="transition group-hover:translate-x-0.5" />
               </span>
             </button>
           );
         })}
       </div>
-      <div className="mt-4 flex items-center justify-center gap-2 text-xs text-slate-500">
-        <Globe size={11} />
-        Or use Mila in your browser — no install needed.
+      <div className="mt-5 flex items-center justify-center gap-2 text-sm text-[#667078]">
+        <Globe size={14} />
+        Browser access is available when installation is not an option.
       </div>
       <GetAppModal platform={openFor} onClose={() => setOpenFor(null)} />
     </div>

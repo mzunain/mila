@@ -1,7 +1,14 @@
 "use client";
 
 import { ChatMessage, ChatResponse } from "@mila/shared";
-import { ArrowUp, Sparkles, Bot, User as UserIcon } from "lucide-react";
+import {
+  AlertCircle,
+  ArrowUp,
+  Bot,
+  Loader2,
+  Sparkles,
+  User as UserIcon,
+} from "lucide-react";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { resolveApiUrl, usePreferences } from "@/lib/preferences";
 
@@ -10,10 +17,25 @@ interface ChatViewProps {
 }
 
 const STARTERS = [
-  "Summarize what I worked on this week",
+  "Draft a follow-up from my last meeting",
   "Which action items are still open?",
-  "What decisions came out of my last sales call?",
-  "Who promised to follow up with me?",
+  "What decisions changed this week?",
+  "Find risks and blockers from recent calls",
+];
+
+const MEMORY_MODES = [
+  {
+    title: "Follow-up writer",
+    prompt: "Draft a concise follow-up email from my most recent meeting",
+  },
+  {
+    title: "Action audit",
+    prompt: "List every open action item grouped by owner",
+  },
+  {
+    title: "Decision trail",
+    prompt: "Show the latest decisions and which meeting they came from",
+  },
 ];
 
 export function ChatView({ token }: ChatViewProps) {
@@ -62,17 +84,21 @@ export function ChatView({ token }: ChatViewProps) {
       });
 
       if (!response.ok) {
-        throw new Error("Chat request failed");
+        throw new Error(await readChatError(response));
       }
 
       const data = (await response.json()) as ChatResponse;
       setMessages((current) => [...current, data.message]);
     } catch (chatError) {
-      setError(
+      const message =
         chatError instanceof Error
           ? chatError.message
-          : "Could not reach Mila chat",
-      );
+          : "Could not reach Mila chat";
+      if (message.toLowerCase().includes("session expired")) {
+        setError(message);
+      } else {
+        setMessages((current) => [...current, buildChatFallbackMessage(message)]);
+      }
     } finally {
       setPending(false);
     }
@@ -85,23 +111,30 @@ export function ChatView({ token }: ChatViewProps) {
 
   return (
     <div className="flex flex-1 flex-col">
-      <div ref={scrollerRef} className="flex-1 overflow-y-auto px-8 py-8 lg:px-12">
+      <div
+        ref={scrollerRef}
+        className="flex-1 overflow-y-auto px-6 py-8 lg:px-10"
+      >
         {messages.length === 0 ? (
           <EmptyState onPick={(prompt) => void sendMessage(prompt)} />
         ) : (
-          <div className="mx-auto flex max-w-3xl flex-col gap-6">
+          <div className="mx-auto flex max-w-5xl flex-col gap-6">
             {messages.map((message) => (
               <MessageBubble key={message.id} message={message} />
             ))}
             {pending && (
-              <div className="flex items-center gap-3 text-sm text-slate-500">
-                <Sparkles size={16} className="animate-pulse text-emerald-300" />
-                Thinking through your meetings…
+              <div className="mila-muted flex items-center gap-3 text-sm">
+                <Loader2 size={16} className="animate-spin text-[var(--accent)]" />
+                Reading your recent meeting memory...
               </div>
             )}
             {error && (
-              <div className="rounded-md border border-red-400/20 bg-red-500/10 px-4 py-3 text-sm text-red-200">
-                {error}
+              <div className="flex items-start gap-3 rounded-lg border border-amber-300/20 bg-amber-300/[0.08] px-4 py-3 text-sm text-amber-50">
+                <AlertCircle size={16} className="mt-0.5 shrink-0 text-amber-200" />
+                <div>
+                  <div className="font-semibold">Mila could not answer yet</div>
+                  <div className="mt-0.5 text-amber-50/80">{error}</div>
+                </div>
               </div>
             )}
           </div>
@@ -110,49 +143,96 @@ export function ChatView({ token }: ChatViewProps) {
 
       <form
         onSubmit={handleSubmit}
-        className="border-t border-white/10 bg-[#0e1116] px-8 py-5 lg:px-12"
+        className="border-t border-[var(--border)] bg-[rgba(17,18,20,0.92)] px-6 py-4 backdrop-blur lg:px-10"
       >
-        <div className="mx-auto flex max-w-3xl items-end gap-3 rounded-2xl border border-white/10 bg-[#121922] px-4 py-3 focus-within:border-emerald-400/60">
-          <textarea
-            value={input}
-            onChange={(event) => setInput(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter" && !event.shiftKey) {
-                event.preventDefault();
-                handleSubmit(event as unknown as FormEvent<HTMLFormElement>);
-              }
-            }}
-            placeholder="Ask about your meetings…"
-            rows={1}
-            className="flex-1 resize-none bg-transparent text-sm leading-6 text-white outline-none placeholder:text-slate-500"
-          />
-          <button
-            type="submit"
-            disabled={pending || !input.trim()}
-            className="grid h-9 w-9 place-items-center rounded-full bg-emerald-300 text-slate-950 transition hover:bg-emerald-200 disabled:opacity-50"
-            aria-label="Send"
-          >
-            <ArrowUp size={16} />
-          </button>
+        <div className="mila-focus mx-auto max-w-5xl rounded-xl border border-[var(--border)] bg-[var(--surface)] p-1.5 shadow-2xl shadow-black/20 transition">
+          <div className="flex h-12 items-center gap-2">
+            <input
+              value={input}
+              onChange={(event) => setInput(event.target.value)}
+              aria-label="Ask Mila"
+              placeholder="Ask about your meetings..."
+              autoComplete="off"
+              className="h-10 min-w-0 flex-1 bg-transparent px-3 py-0 text-[15px] leading-10 text-[var(--foreground)] outline-none placeholder:text-[var(--muted-soft)]"
+            />
+            <button
+              type="submit"
+              disabled={pending || !input.trim()}
+              className="mila-primary grid h-10 w-10 shrink-0 place-items-center rounded-full transition disabled:cursor-not-allowed disabled:opacity-45"
+              aria-label="Send"
+            >
+              <ArrowUp size={16} />
+            </button>
+          </div>
         </div>
       </form>
     </div>
   );
 }
 
+async function readChatError(response: Response) {
+  if (response.status === 401) {
+    return "Your session expired. Sign in again to continue.";
+  }
+
+  if (response.status === 404) {
+    return "Meeting memory is temporarily unavailable.";
+  }
+
+  try {
+    const data = (await response.json()) as { message?: string | string[] };
+    if (Array.isArray(data.message)) return data.message.join(" ");
+    if (typeof data.message === "string" && data.message.trim()) {
+      return data.message;
+    }
+  } catch {
+    // Fall through to status-aware copy.
+  }
+
+  return "Meeting memory is temporarily unavailable.";
+}
+
+function buildChatFallbackMessage(reason: string): ChatMessage {
+  return {
+    id: crypto.randomUUID(),
+    role: "assistant",
+    createdAt: new Date().toISOString(),
+    content: `Meeting memory is temporarily unavailable. I kept your question in this chat, and I can answer once the API connection is back online. Check the API connection in Preferences if this keeps happening.${reason ? `\n\nStatus: ${reason}` : ""}`,
+  };
+}
+
 function EmptyState({ onPick }: { onPick: (prompt: string) => void }) {
   return (
-    <div className="mx-auto flex max-w-2xl flex-col items-center gap-6 pt-16 text-center">
-      <div className="grid h-14 w-14 place-items-center rounded-2xl border border-emerald-300/30 bg-emerald-300/10 text-emerald-300">
+    <div className="mx-auto flex max-w-4xl flex-col gap-6 pt-8">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+        {MEMORY_MODES.map((mode) => (
+          <button
+            key={mode.title}
+            type="button"
+            onClick={() => onPick(mode.prompt)}
+            className="mila-surface-soft rounded-xl border px-4 py-4 text-left transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)]"
+          >
+            <div className="text-sm font-semibold text-[var(--foreground)]">
+              {mode.title}
+            </div>
+            <div className="mila-muted mt-1 text-xs leading-5">
+              {mode.prompt}
+            </div>
+          </button>
+        ))}
+      </div>
+
+      <div className="flex flex-col items-center gap-6 text-center">
+      <div className="grid h-14 w-14 place-items-center rounded-xl border border-[var(--accent-border)] bg-[var(--accent-faint)] text-[var(--accent)]">
         <Sparkles size={22} />
       </div>
       <div className="space-y-2">
-        <h2 className="text-2xl font-semibold text-white">
-          Chat across every meeting
+        <h2 className="text-2xl font-semibold text-[var(--foreground)]">
+          Meeting context, ready to query
         </h2>
-        <p className="text-sm text-slate-400">
-          Mila has your transcripts and notes already. Try one of these or ask
-          your own question.
+        <p className="mila-muted text-sm leading-6">
+          Pull answers from the most recent summaries, key points, decisions,
+          and follow-ups.
         </p>
       </div>
       <div className="grid w-full grid-cols-1 gap-3 sm:grid-cols-2">
@@ -161,11 +241,12 @@ function EmptyState({ onPick }: { onPick: (prompt: string) => void }) {
             key={prompt}
             type="button"
             onClick={() => onPick(prompt)}
-            className="rounded-xl border border-white/10 bg-[#121922] px-4 py-3 text-left text-sm text-slate-300 transition hover:border-emerald-400/40 hover:bg-[#162130] hover:text-white"
+            className="mila-surface-soft rounded-xl border px-4 py-3 text-left text-sm text-[var(--foreground)] transition hover:border-[var(--accent-border)] hover:bg-[var(--surface-raised)]"
           >
             {prompt}
           </button>
         ))}
+      </div>
       </div>
     </div>
   );
@@ -176,7 +257,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
   return (
     <div className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}>
       {!isUser && (
-        <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-emerald-400/15 text-emerald-300">
+        <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-[var(--accent-faint)] text-[var(--accent)]">
           <Bot size={14} />
         </div>
       )}
@@ -184,8 +265,8 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         <div
           className={
             isUser
-              ? "rounded-2xl rounded-tr-sm bg-emerald-300 px-4 py-3 text-sm leading-6 text-slate-950"
-              : "rounded-2xl rounded-tl-sm border border-white/10 bg-[#121922] px-4 py-3 text-sm leading-6 text-slate-100"
+              ? "rounded-2xl rounded-tr-sm bg-[var(--accent)] px-4 py-3 text-sm leading-6 text-[var(--accent-contrast)]"
+              : "mila-surface-raised rounded-2xl rounded-tl-sm border px-4 py-3 text-sm leading-6 text-[var(--foreground)]"
           }
         >
           {message.content.split(/\n+/).map((paragraph, index) => (
@@ -200,7 +281,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
               <a
                 key={citation.sessionId}
                 href={`/app?sessionId=${citation.sessionId}`}
-                className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1 text-xs text-slate-300 transition hover:border-emerald-400/30 hover:text-white"
+                className="mila-chip rounded-full px-3 py-1 text-xs transition hover:border-[var(--accent-border)] hover:text-[var(--foreground)]"
               >
                 {citation.title}
               </a>
@@ -209,7 +290,7 @@ function MessageBubble({ message }: { message: ChatMessage }) {
         )}
       </div>
       {isUser && (
-        <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full bg-white/5 text-slate-300">
+        <div className="mila-chip mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-full">
           <UserIcon size={14} />
         </div>
       )}

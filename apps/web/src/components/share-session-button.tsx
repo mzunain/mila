@@ -2,7 +2,8 @@
 
 import { ShareLinkResponse } from "@mila/shared";
 import { Check, Copy, Link2, Loader2, Share2, X } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import { resolveApiUrl, usePreferences } from "@/lib/preferences";
 
 interface ShareSessionButtonProps {
@@ -96,10 +97,26 @@ export function ShareSessionButton({
 
   const copy = useCallback(async () => {
     if (!shareUrl) return;
-    await navigator.clipboard.writeText(shareUrl);
+    setError(null);
+    const didCopy = await copyTextToClipboard(shareUrl);
+    if (!didCopy) {
+      setError("Clipboard access was blocked. Select the link and copy it manually.");
+      return;
+    }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1800);
   }, [shareUrl]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [open]);
 
   return (
     <>
@@ -109,7 +126,7 @@ export function ShareSessionButton({
         onClick={() => setOpen(true)}
         className={
           className ??
-          "inline-flex h-10 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 text-sm font-medium text-slate-200 transition hover:bg-white/[0.07] hover:text-white disabled:cursor-not-allowed disabled:opacity-50"
+          "mila-secondary inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-50"
         }
         title={
           sessionId
@@ -130,14 +147,14 @@ export function ShareSessionButton({
             if (event.target === event.currentTarget) setOpen(false);
           }}
         >
-          <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#121922] p-6 shadow-2xl">
+          <div className="mila-surface-raised w-full max-w-md rounded-2xl border p-6 shadow-2xl">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <h2 className="inline-flex items-center gap-2 text-lg font-semibold text-white">
-                  <Link2 size={17} className="text-emerald-300" />
+                <h2 className="inline-flex items-center gap-2 text-lg font-semibold text-[var(--foreground)]">
+                  <Link2 size={17} className="text-[var(--accent)]" />
                   Share this meeting
                 </h2>
-                <p className="mt-1 text-sm text-slate-400">
+                <p className="mila-muted mt-1 text-sm">
                   Anyone with the link can view the summary, key points,
                   decisions, and action items. They cannot see the transcript.
                 </p>
@@ -145,7 +162,7 @@ export function ShareSessionButton({
               <button
                 type="button"
                 onClick={() => setOpen(false)}
-                className="rounded-md p-1 text-slate-500 transition hover:bg-white/[0.05] hover:text-white"
+                className="rounded-md p-1 text-[var(--muted-soft)] transition hover:bg-white/[0.05] hover:text-[var(--foreground)]"
                 aria-label="Close"
               >
                 <X size={16} />
@@ -155,24 +172,24 @@ export function ShareSessionButton({
             <div className="mt-5 space-y-3">
               {shareUrl ? (
                 <>
-                  <div className="flex items-center gap-2 rounded-md border border-white/10 bg-[#0d131b] px-3 py-2">
-                    <Link2 size={14} className="shrink-0 text-slate-500" />
+                  <div className="mila-focus flex items-center gap-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2">
+                    <Link2 size={14} className="shrink-0 text-[var(--muted-soft)]" />
                     <input
                       readOnly
                       value={shareUrl}
                       onFocus={(event) => event.currentTarget.select()}
-                      className="min-w-0 flex-1 bg-transparent text-sm text-white outline-none"
+                      className="min-w-0 flex-1 bg-transparent text-sm text-[var(--foreground)] outline-none"
                     />
                     <button
                       type="button"
                       onClick={copy}
-                      className="inline-flex items-center gap-1.5 rounded bg-emerald-300 px-2.5 py-1 text-xs font-semibold text-slate-950 transition hover:bg-emerald-200"
+                      className="mila-primary inline-flex items-center gap-1.5 rounded px-2.5 py-1 text-xs font-semibold transition"
                     >
                       {copied ? <Check size={13} /> : <Copy size={13} />}
                       {copied ? "Copied" : "Copy"}
                     </button>
                   </div>
-                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+                  <div className="mila-muted flex flex-wrap items-center justify-between gap-2 text-xs">
                     <span>
                       Link active · Read-only public summary
                     </span>
@@ -192,7 +209,7 @@ export function ShareSessionButton({
                   type="button"
                   onClick={create}
                   disabled={busy || !sessionId}
-                  className="flex h-10 w-full items-center justify-center gap-2 rounded-md bg-emerald-300 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:cursor-not-allowed disabled:opacity-50"
+                  className="mila-primary flex h-10 w-full items-center justify-center gap-2 rounded-lg text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50"
                 >
                   {busy ? (
                     <Loader2 size={15} className="animate-spin" />

@@ -149,9 +149,9 @@ function CommandPaletteContent({
         className="absolute inset-0 cursor-default bg-black/60 backdrop-blur-sm"
         onClick={onClose}
       />
-      <div className="relative w-full max-w-xl overflow-hidden rounded-xl border border-white/10 bg-[#101821] shadow-2xl shadow-black/40">
-        <div className="flex items-center gap-3 border-b border-white/10 px-4 py-3">
-          <Search size={16} className="text-slate-500" />
+      <div className="mila-surface-raised relative w-full max-w-xl overflow-hidden rounded-xl border shadow-2xl shadow-black/40">
+        <div className="flex items-center gap-3 border-b border-[var(--border)] px-4 py-3">
+          <Search size={16} className="text-[var(--muted-soft)]" />
           <input
             ref={(node) => {
               inputRef.current = node;
@@ -163,16 +163,16 @@ function CommandPaletteContent({
               setHighlight(0);
             }}
             placeholder="Type a command or search…"
-            className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-slate-500"
+            className="flex-1 bg-transparent text-sm text-[var(--foreground)] outline-none placeholder:text-[var(--muted-soft)]"
           />
-          <span className="inline-flex items-center gap-1 rounded border border-white/10 bg-white/[0.04] px-2 py-1 text-[11px] font-medium text-slate-400">
+          <span className="mila-chip inline-flex items-center gap-1 rounded px-2 py-1 text-[11px] font-medium">
             <Command size={11} /> K
           </span>
         </div>
 
         <ul className="max-h-[50vh] overflow-y-auto py-1">
           {filtered.length === 0 && (
-            <li className="px-4 py-6 text-center text-sm text-slate-500">
+            <li className="mila-muted px-4 py-6 text-center text-sm">
               No matching commands.
             </li>
           )}
@@ -190,19 +190,19 @@ function CommandPaletteContent({
                   }}
                   className={
                     isActive
-                      ? "flex w-full items-center gap-3 bg-white/[0.06] px-4 py-2.5 text-left"
-                      : "flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-white/[0.04]"
+                      ? "flex w-full items-center gap-3 bg-[var(--accent-faint)] px-4 py-2.5 text-left"
+                      : "flex w-full items-center gap-3 px-4 py-2.5 text-left transition hover:bg-white/[0.05]"
                   }
                 >
-                  <span className="grid h-7 w-7 place-items-center rounded-md border border-white/10 bg-white/[0.04] text-slate-300">
+                  <span className="mila-chip grid h-7 w-7 place-items-center rounded-md">
                     <Icon size={14} />
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium text-white">
+                    <span className="block truncate text-sm font-medium text-[var(--foreground)]">
                       {action.label}
                     </span>
                     {action.hint && (
-                      <span className="block truncate text-xs text-slate-500">
+                      <span className="mila-muted block truncate text-xs">
                         {action.hint}
                       </span>
                     )}
@@ -213,7 +213,7 @@ function CommandPaletteContent({
           })}
         </ul>
 
-        <div className="flex items-center justify-between border-t border-white/10 px-4 py-2 text-[11px] text-slate-500">
+        <div className="mila-muted flex items-center justify-between border-t border-[var(--border)] px-4 py-2 text-[11px]">
           <span>↑↓ to navigate · ↵ to run · Esc to close</span>
           <span>Mila</span>
         </div>

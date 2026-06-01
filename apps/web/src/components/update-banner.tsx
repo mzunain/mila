@@ -51,8 +51,8 @@ export function UpdateBanner() {
 
   return (
     <div className="fixed inset-x-0 top-0 z-50 flex justify-center px-4 pt-3">
-      <div className="flex items-center gap-3 rounded-full border border-emerald-300/30 bg-emerald-300/[0.08] px-4 py-2 text-sm text-emerald-100 shadow-lg backdrop-blur">
-        <Download size={15} className="text-emerald-200" />
+      <div className="flex items-center gap-3 rounded-full border border-[var(--accent-border)] bg-[var(--accent-faint)] px-4 py-2 text-sm text-[var(--foreground)] shadow-lg backdrop-blur">
+        <Download size={15} className="text-[var(--accent)]" />
         <span>
           Mila {version} is ready
         </span>
@@ -60,14 +60,14 @@ export function UpdateBanner() {
           type="button"
           onClick={handleInstall}
           disabled={installing}
-          className="rounded-full bg-emerald-300 px-3 py-1 text-xs font-semibold text-slate-950 transition hover:bg-emerald-200 disabled:opacity-60"
+          className="mila-primary rounded-full px-3 py-1 text-xs font-semibold transition disabled:opacity-60"
         >
           {installing ? "Restarting…" : "Install now"}
         </button>
         <button
           type="button"
           onClick={() => setDismissed(true)}
-          className="rounded-full p-1 text-emerald-200/70 transition hover:text-emerald-50"
+          className="rounded-full p-1 text-[var(--accent)]/70 transition hover:text-[var(--foreground)]"
           aria-label="Dismiss until next launch"
           title="Later"
         >

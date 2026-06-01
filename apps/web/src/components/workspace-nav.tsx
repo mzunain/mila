@@ -34,8 +34,8 @@ export function WorkspaceNav({ className }: WorkspaceNavProps) {
                 href={item.href}
                 className={
                   active
-                    ? "flex items-center gap-3 rounded-md bg-white/[0.07] px-3 py-2 text-sm font-medium text-white"
-                    : "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium text-slate-400 transition hover:bg-white/[0.04] hover:text-white"
+                    ? "flex items-center gap-3 rounded-lg border border-[var(--accent-border)] bg-[var(--accent-faint)] px-3 py-2 text-sm font-semibold text-[var(--foreground)] shadow-[inset_3px_0_0_var(--accent)]"
+                    : "mila-muted flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition hover:bg-white/[0.05] hover:text-[var(--foreground)]"
                 }
               >
                 <Icon size={16} aria-hidden />

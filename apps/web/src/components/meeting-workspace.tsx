@@ -5,6 +5,8 @@ import {
   CreateMeetingRequest,
   CreateMeetingResponse,
   ExternalMeetingContext,
+  MeetingActionInbox,
+  MeetingBrief,
   MeetingNotes,
   MeetingProvider,
   MeetingSession,
@@ -12,22 +14,35 @@ import {
   ServerMeetingEvent,
   SupportedLanguageCode,
   TranscriptSegment,
+  LiveCoachCard as LiveCoachCardModel,
+  LiveMeetingCoach,
+  buildLiveMeetingCoach,
+  buildMeetingActionReview,
   createEmptyNotes,
   getLanguage,
   supportedLanguages,
 } from "@mila/shared";
 import {
+  AlertCircle,
+  ArrowUpRight,
+  BrainCircuit,
+  CalendarClock,
   Clipboard,
   Captions,
+  CheckCircle2,
   Command,
   FileAudio,
   FileDown,
+  Info,
   Languages,
+  ListTodo,
+  MessageCircleQuestion,
   Mic,
   Pause,
   Play,
   Radar,
   Radio,
+  RefreshCw,
   Search,
   ShieldAlert,
   Sparkles,
@@ -35,14 +50,18 @@ import {
   ToggleLeft,
   ToggleRight,
   Upload,
+  UsersRound,
+  X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLogo } from "./brand-logo";
 import { AccountCard } from "./auth/account-card";
 import { CommandPalette } from "./command-palette";
+import { MeetingBriefCard } from "./meeting-brief-card";
 import { ShareSessionButton } from "./share-session-button";
 import { TemplatePicker } from "./template-picker";
 import { WorkspaceNav } from "./workspace-nav";
+import { copyTextToClipboard } from "@/lib/clipboard";
 import {
   resolveApiUrl,
   resolveWsUrl,
@@ -64,6 +83,19 @@ type MicPermissionState =
   | "granted"
   | "denied"
   | "unsupported";
+type NoticeTone = "info" | "warning" | "error";
+type TranscriptionHealth = "ready" | "catching-up";
+
+interface WorkspaceNotice {
+  id: number;
+  tone: NoticeTone;
+  title: string;
+  message: string;
+}
+
+type ServerErrorEvent = Extract<ServerMeetingEvent, { type: "error" }>;
+type ServerStatusEvent = Extract<ServerMeetingEvent, { type: "status" }>;
+type RecoverableServerEvent = ServerErrorEvent | ServerStatusEvent;
 
 interface AutoStartSignal {
   title?: string;
@@ -80,7 +112,13 @@ interface StartLiveSessionOptions {
   source?: MeetingSource;
   autoStarted?: boolean;
   externalMeeting?: ExternalMeetingContext;
+  templateId?: string;
 }
+
+type DesktopWorkspaceCommand =
+  | "mila:desktop-new-meeting"
+  | "mila:desktop-start-mic"
+  | "mila:desktop-stop-mic";
 
 interface AppCapabilities {
   asrProvider: string;
@@ -105,6 +143,9 @@ interface MeetingWorkspaceProps {
   token: string;
   user: WorkspaceUser;
 }
+
+const PENDING_WORKSPACE_COMMAND_KEY = "mila:pending-desktop-command";
+const STORED_AUTO_START_SIGNAL_TTL_MS = 10 * 60 * 1000;
 
 export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const { preferences } = usePreferences();
@@ -137,14 +178,22 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     supportsDemoAudio: true,
     supportedInputs: ["audio/webm", "audio/ogg", "audio/mpeg", "audio/wav"],
   });
+  const [actionInbox, setActionInbox] = useState<MeetingActionInbox | null>(
+    null,
+  );
+  const [actionInboxLoading, setActionInboxLoading] = useState(true);
   const [micPermission, setMicPermission] =
     useState<MicPermissionState>("unknown");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<WorkspaceNotice | null>(null);
+  const [transcriptionHealth, setTranscriptionHealth] =
+    useState<TranscriptionHealth>("ready");
   const [search, setSearch] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [copied, setCopied] = useState(false);
   const openCommandPalette = useCallback(() => setCommandOpen(true), []);
   const closeCommandPalette = useCallback(() => setCommandOpen(false), []);
+  const sessionRef = useRef<MeetingSession | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -163,6 +212,86 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const audioSampleRateRef = useRef(16000);
   const chunkIndexRef = useRef(0);
   const autoStartedSignalRef = useRef<string | null>(null);
+  const noticeIdRef = useRef(0);
+  const recoverableAsrWindowRef = useRef({ count: 0, startedAt: 0 });
+  const transcriptionHealthTimeoutRef = useRef<number | null>(null);
+
+  const showNotice = useCallback(
+    (nextNotice: Omit<WorkspaceNotice, "id">) => {
+      noticeIdRef.current += 1;
+      setNotice({ id: noticeIdRef.current, ...nextNotice });
+    },
+    [],
+  );
+
+  const clearNotice = useCallback(() => setNotice(null), []);
+
+  const clearTranscriptionHealth = useCallback(() => {
+    if (transcriptionHealthTimeoutRef.current) {
+      window.clearTimeout(transcriptionHealthTimeoutRef.current);
+      transcriptionHealthTimeoutRef.current = null;
+    }
+    setTranscriptionHealth("ready");
+  }, []);
+
+  const markRecoverableTranscriptionIssue = useCallback(
+    (event: RecoverableServerEvent) => {
+      const now = Date.now();
+      const issueWindowMs = 30_000;
+      const current = recoverableAsrWindowRef.current;
+
+      if (now - current.startedAt > issueWindowMs) {
+        current.startedAt = now;
+        current.count = 1;
+      } else {
+        current.count += 1;
+      }
+
+      console.warn("Recoverable transcription issue.", {
+        code: event.code,
+        message: event.message,
+      });
+
+      // A single skipped chunk is normal under load and should not alarm the
+      // user. Only repeated recoverable issues become a compact live status.
+      if (current.count < 2) return;
+
+      setTranscriptionHealth("catching-up");
+      if (transcriptionHealthTimeoutRef.current) {
+        window.clearTimeout(transcriptionHealthTimeoutRef.current);
+      }
+      transcriptionHealthTimeoutRef.current = window.setTimeout(() => {
+        setTranscriptionHealth("ready");
+        transcriptionHealthTimeoutRef.current = null;
+      }, 8000);
+    },
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      if (transcriptionHealthTimeoutRef.current) {
+        window.clearTimeout(transcriptionHealthTimeoutRef.current);
+      }
+    },
+    [],
+  );
+
+  const loadActionInbox = useCallback(async () => {
+    setActionInboxLoading(true);
+    try {
+      const response = await fetch("/api/actions", { cache: "no-store" });
+      if (!response.ok) {
+        setActionInbox(null);
+        return;
+      }
+      setActionInbox((await response.json()) as MeetingActionInbox);
+    } catch {
+      setActionInbox(null);
+    } finally {
+      setActionInboxLoading(false);
+    }
+  }, []);
 
   const filteredSegments = useMemo(() => {
     const query = search.trim().toLowerCase();
@@ -209,7 +338,13 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
         };
 
         socket.onmessage = (message) => {
-          const event = JSON.parse(message.data) as ServerMeetingEvent;
+          let event: ServerMeetingEvent;
+          try {
+            event = JSON.parse(message.data) as ServerMeetingEvent;
+          } catch {
+            console.warn("Ignored malformed realtime message from Mila API.");
+            return;
+          }
 
           if (event.type === "session") {
             setNotes(event.notes);
@@ -222,21 +357,37 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
                 : [...current, event.segment],
             );
             setNotes(event.notes);
+            clearTranscriptionHealth();
           }
 
           if (event.type === "notes") {
             setNotes(event.notes);
           }
 
+          if (event.type === "status") {
+            if (isRecoverableTranscriptionEvent(event)) {
+              markRecoverableTranscriptionIssue(event);
+            }
+            return;
+          }
+
           if (event.type === "error") {
             // ASR_TIMEOUT / ASR_ERROR are per-chunk hiccups — the session is
             // still recording on the server, so don't tear down the UI.
-            const isRecoverable =
-              event.code === "ASR_TIMEOUT" || event.code === "ASR_ERROR";
-            setError(event.message);
-            if (!isRecoverable) {
-              setStatus("error");
+            if (isProtocolNoise(event)) {
+              console.warn("Ignored malformed realtime event.", event);
+              return;
             }
+
+            const isRecoverable =
+              isRecoverableTranscriptionEvent(event);
+            if (isRecoverable) {
+              markRecoverableTranscriptionIssue(event);
+              return;
+            }
+
+            setError(formatFatalServerError(event));
+            setStatus("error");
           }
         };
 
@@ -245,7 +396,12 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
           setStatus((current) => (current === "recording" ? "idle" : current));
         };
       }),
-    [outputLanguage, apiWsUrl],
+    [
+      outputLanguage,
+      apiWsUrl,
+      clearTranscriptionHealth,
+      markRecoverableTranscriptionIssue,
+    ],
   );
 
   const resetPcmBuffer = useCallback(() => {
@@ -374,6 +530,24 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     [apiHttpUrl, token],
   );
 
+  useEffect(() => {
+    sessionRef.current = session;
+  }, [session]);
+
+  const completeSessionViaHttp = useCallback(
+    (sessionId: string, keepalive = false) => {
+      void fetch(`${apiHttpUrl}/api/sessions/${sessionId}/complete`, {
+        method: "POST",
+        headers: buildAuthHeaders(),
+        keepalive,
+      }).catch(() => {
+        // Best-effort cleanup. The WebSocket stop path is still the primary
+        // path while the app is open.
+      });
+    },
+    [apiHttpUrl, buildAuthHeaders],
+  );
+
   const createSession = useCallback(
     async (request: Partial<CreateMeetingRequest> = {}) => {
       const response = await fetch(`${apiHttpUrl}/api/sessions`, {
@@ -390,7 +564,9 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       });
 
       if (!response.ok) {
-        throw new Error("Could not create meeting session");
+        throw new Error(
+          await readApiError(response, "Could not create meeting session"),
+        );
       }
 
       return (await response.json()) as CreateMeetingResponse;
@@ -401,6 +577,8 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const openLiveSession = useCallback(
     async (options: StartLiveSessionOptions = {}) => {
       setError(null);
+      clearNotice();
+      clearTranscriptionHealth();
       setStatus("connecting");
       setSegments([]);
       chunkIndexRef.current = 0;
@@ -416,6 +594,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
         source: options.source ?? "manual",
         autoStarted: options.autoStarted ?? false,
         externalMeeting: options.externalMeeting,
+        templateId: options.templateId,
       });
       setSession(created.session);
       setNotes(created.notes);
@@ -425,12 +604,19 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
       return { created, socket };
     },
-    [connectSocket, createSession, stopLocalCapture],
+    [
+      clearNotice,
+      clearTranscriptionHealth,
+      connectSocket,
+      createSession,
+      stopLocalCapture,
+    ],
   );
 
   const openExistingSession = useCallback(
     async (sessionId: string) => {
       setError(null);
+      clearNotice();
       setStatus("connecting");
 
       stopLocalCapture();
@@ -442,7 +628,12 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       });
 
       if (!response.ok) {
-        throw new Error("Could not open the detected meeting session");
+        throw new Error(
+          await readApiError(
+            response,
+            "Could not open the detected meeting session",
+          ),
+        );
       }
 
       const detail = (await response.json()) as MeetingSessionDetail;
@@ -456,7 +647,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
       return detail;
     },
-    [apiHttpUrl, buildAuthHeaders, connectSocket, stopLocalCapture],
+    [apiHttpUrl, buildAuthHeaders, clearNotice, connectSocket, stopLocalCapture],
   );
 
   const sendMockChunk = useCallback(
@@ -535,7 +726,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     [flushMicrophoneChunk, resetPcmBuffer],
   );
 
-  const startRecording = async () => {
+  const startRecording = useCallback(async () => {
     try {
       if (!capabilities.supportsRealAudio) {
         setError(
@@ -554,7 +745,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       setError(captureError.message);
       setStatus("error");
     }
-  };
+  }, [attachMicrophone, capabilities.supportsRealAudio, openLiveSession]);
 
   const uploadAudio = async (file: File | null) => {
     if (!file) {
@@ -603,6 +794,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const simulateChunk = async () => {
     try {
       setError(null);
+      clearNotice();
       let activeSession = session;
 
       if (!activeSession || wsRef.current?.readyState !== WebSocket.OPEN) {
@@ -627,6 +819,59 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     }
   };
 
+  const startBriefCapture = useCallback(
+    async (brief: MeetingBrief) => {
+      const { meeting } = brief;
+      const source: MeetingSource =
+        meeting.id === "adhoc" ? "manual" : "auto-calendar";
+      const externalMeeting: ExternalMeetingContext = {
+        provider: meeting.provider ?? detectMeetingProvider(meeting.meetingUrl),
+        title: meeting.title,
+        url: meeting.meetingUrl,
+        detectedAt: new Date().toISOString(),
+        source,
+      };
+
+      try {
+        setTemplateId(brief.suggestedTemplateId);
+        setPendingTitle(meeting.title);
+        const { created, socket } = await openLiveSession({
+          title: meeting.title,
+          source,
+          autoStarted: source === "auto-calendar",
+          externalMeeting,
+          templateId: brief.suggestedTemplateId,
+        });
+
+        if (!capabilities.supportsRealAudio) {
+          setStatus("idle");
+          showNotice({
+            tone: "info",
+            title: "Brief session ready",
+            message:
+              "Mila created the session from your brief. Connect the ASR worker to stream real microphone audio.",
+          });
+          return;
+        }
+
+        await attachMicrophone(created.session, socket);
+      } catch (briefError) {
+        const captureError = describeCaptureError(briefError);
+        setMicPermission((current) =>
+          captureError.permissionDenied ? "denied" : current,
+        );
+        setError(captureError.message);
+        setStatus("error");
+      }
+    },
+    [
+      attachMicrophone,
+      capabilities.supportsRealAudio,
+      openLiveSession,
+      showNotice,
+    ],
+  );
+
   const toggleAutoStart = () => {
     const nextEnabled = !autoStartEnabled;
     setAutoStartEnabled(nextEnabled);
@@ -644,6 +889,69 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       mockAudio: true,
     });
   };
+
+  const startAutoDetectedSession = useCallback(
+    async (signal: AutoStartSignal) => {
+      const signalKey = getSignalKey(signal);
+
+      if (autoStartedSignalRef.current === signalKey) {
+        return;
+      }
+
+      autoStartedSignalRef.current = signalKey;
+      clearStoredAutoStartSignal();
+      setAutoStartSignal(signal);
+
+      try {
+        setAutoStartStatus("starting");
+        const externalMeeting = toExternalMeetingContext(signal);
+        const { created, socket } = await openLiveSession({
+          title: signal.title ?? "Auto-detected meeting",
+          source: signal.source,
+          autoStarted: true,
+          externalMeeting,
+        });
+
+        if (signal.mockAudio) {
+          setStatus("recording");
+          sendMockChunk(created.session, socket);
+        } else if (!signal.captureAudio) {
+          setStatus("recording");
+        } else if (!capabilities.supportsRealAudio) {
+          throw new Error(
+            "Auto-start detected a meeting, but real audio transcription is not configured yet.",
+          );
+        } else {
+          await attachMicrophone(created.session, socket);
+        }
+
+        replaceAutoStartUrlWithSession(created.session.id);
+        setAutoStartStatus("detected");
+      } catch (autoStartError) {
+        const captureError = describeCaptureError(autoStartError);
+        setAutoStartStatus("blocked");
+        setStatus("error");
+        setMicPermission((current) =>
+          captureError.permissionDenied ? "denied" : current,
+        );
+        setError(captureError.message);
+      }
+    },
+    [
+      attachMicrophone,
+      capabilities.supportsRealAudio,
+      openLiveSession,
+      sendMockChunk,
+    ],
+  );
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadActionInbox();
+    }, 0);
+
+    return () => window.clearTimeout(timer);
+  }, [loadActionInbox]);
 
   useEffect(() => {
     if (!autoStartEnabled) {
@@ -693,58 +1001,10 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       return;
     }
 
-    const signalKey = getSignalKey(autoStartSignal);
-
-    if (autoStartedSignalRef.current === signalKey) {
-      return;
-    }
-
-    autoStartedSignalRef.current = signalKey;
-
-    void (async () => {
-      try {
-        setAutoStartStatus("starting");
-        const externalMeeting = toExternalMeetingContext(autoStartSignal);
-        const { created, socket } = await openLiveSession({
-          title: autoStartSignal.title ?? "Auto-detected meeting",
-          source: autoStartSignal.source,
-          autoStarted: true,
-          externalMeeting,
-        });
-
-        if (autoStartSignal.mockAudio) {
-          setStatus("recording");
-          sendMockChunk(created.session, socket);
-        } else if (!autoStartSignal.captureAudio) {
-          setStatus("recording");
-        } else if (!capabilities.supportsRealAudio) {
-          throw new Error(
-            "Auto-start detected a meeting, but real audio transcription is not configured yet.",
-          );
-        } else {
-          await attachMicrophone(created.session, socket);
-        }
-
-        setAutoStartStatus("detected");
-      } catch (autoStartError) {
-        const captureError = describeCaptureError(autoStartError);
-        setAutoStartStatus("blocked");
-        setStatus("error");
-        setMicPermission((current) =>
-          captureError.permissionDenied ? "denied" : current,
-        );
-        setError(captureError.message);
-      }
-    })();
-  }, [
-    attachMicrophone,
-    autoStartEnabled,
-    autoStartSignal,
-    capabilities.supportsRealAudio,
-    openLiveSession,
-    sendMockChunk,
-    status,
-  ]);
+    queueMicrotask(() => {
+      void startAutoDetectedSession(autoStartSignal);
+    });
+  }, [autoStartEnabled, autoStartSignal, startAutoDetectedSession, status]);
 
   useEffect(() => {
     let cancelled = false;
@@ -816,23 +1076,136 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     })();
   }, [openExistingSession]);
 
-  const stopRecording = () => {
-    stopLocalCapture(false);
+  const stopRecording = useCallback(
+    (options: { keepalive?: boolean; updateState?: boolean } = {}) => {
+      const { keepalive = false, updateState = true } = options;
+      const activeSession = sessionRef.current;
+      const socket = wsRef.current;
 
-    if (session && wsRef.current?.readyState === WebSocket.OPEN) {
-      flushMicrophoneChunk(session, wsRef.current, { force: true });
-      wsRef.current.send(
-        JSON.stringify({ type: "stop", sessionId: session.id }),
-      );
-      wsRef.current.close();
+      wsRef.current = null;
+      stopLocalCapture(false);
+
+      let sentStopOverSocket = false;
+
+      if (activeSession && socket?.readyState === WebSocket.OPEN) {
+        flushMicrophoneChunk(activeSession, socket, { force: true });
+        socket.send(
+          JSON.stringify({ type: "stop", sessionId: activeSession.id }),
+        );
+        socket.close();
+        sentStopOverSocket = true;
+      }
+
+      if (activeSession && (!sentStopOverSocket || keepalive)) {
+        completeSessionViaHttp(activeSession.id, keepalive);
+      }
+
+      resetPcmBuffer();
+      if (updateState) setStatus("idle");
+    },
+    [
+      completeSessionViaHttp,
+      flushMicrophoneChunk,
+      resetPcmBuffer,
+      stopLocalCapture,
+    ],
+  );
+
+  const resetWorkspaceForNewMeeting = useCallback(() => {
+    stopRecording({ keepalive: true });
+    setSession(null);
+    setSegments([]);
+    setNotes(createEmptyNotes(outputLanguage));
+    setPendingTitle(null);
+    setError(null);
+    clearNotice();
+    clearTranscriptionHealth();
+    setStatus("idle");
+  }, [
+    clearNotice,
+    clearTranscriptionHealth,
+    outputLanguage,
+    stopRecording,
+  ]);
+
+  const startDesktopCapture = useCallback(() => {
+    const pendingSignal = getStoredAutoStartSignal();
+    const canStart = status === "idle" || status === "error";
+
+    if (pendingSignal && canStart) {
+      void startAutoDetectedSession(pendingSignal);
+      return;
     }
 
-    resetPcmBuffer();
-    setStatus("idle");
-  };
+    if (canStart) {
+      void startRecording();
+    }
+  }, [startAutoDetectedSession, startRecording, status]);
+
+  const consumeDesktopCommand = useCallback(
+    (command: DesktopWorkspaceCommand) => {
+      if (command === "mila:desktop-new-meeting") {
+        resetWorkspaceForNewMeeting();
+        return;
+      }
+
+      if (command === "mila:desktop-start-mic") {
+        startDesktopCapture();
+        return;
+      }
+
+      stopRecording();
+    },
+    [resetWorkspaceForNewMeeting, startDesktopCapture, stopRecording],
+  );
+
+  useEffect(() => {
+    const onNewMeeting = () => consumeDesktopCommand("mila:desktop-new-meeting");
+    const onStartMic = () => consumeDesktopCommand("mila:desktop-start-mic");
+    const onStopMic = () => consumeDesktopCommand("mila:desktop-stop-mic");
+
+    window.addEventListener("mila:desktop-new-meeting", onNewMeeting);
+    window.addEventListener("mila:desktop-start-mic", onStartMic);
+    window.addEventListener("mila:desktop-stop-mic", onStopMic);
+
+    const pendingCommand = takePendingWorkspaceCommand();
+    if (pendingCommand) {
+      queueMicrotask(() => consumeDesktopCommand(pendingCommand));
+    }
+
+    return () => {
+      window.removeEventListener("mila:desktop-new-meeting", onNewMeeting);
+      window.removeEventListener("mila:desktop-start-mic", onStartMic);
+      window.removeEventListener("mila:desktop-stop-mic", onStopMic);
+    };
+  }, [consumeDesktopCommand]);
+
+  useEffect(() => {
+    const finishActiveCapture = () => {
+      stopRecording({ keepalive: true, updateState: false });
+    };
+
+    window.addEventListener("pagehide", finishActiveCapture);
+    window.addEventListener("beforeunload", finishActiveCapture);
+
+    return () => {
+      window.removeEventListener("pagehide", finishActiveCapture);
+      window.removeEventListener("beforeunload", finishActiveCapture);
+      finishActiveCapture();
+    };
+  }, [stopRecording]);
 
   const copyMarkdown = async () => {
-    await navigator.clipboard.writeText(toMarkdown(notes));
+    const didCopy = await copyTextToClipboard(toMarkdown(notes));
+    if (!didCopy) {
+      showNotice({
+        tone: "warning",
+        title: "Copy unavailable",
+        message:
+          "Your browser blocked clipboard access. Use the Markdown download instead.",
+      });
+      return;
+    }
     setCopied(true);
     window.setTimeout(() => setCopied(false), 1500);
   };
@@ -847,7 +1220,15 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
   const downloadPdf = () => {
     const title = session?.title ?? pendingTitle ?? "Mila Notes";
-    openPrintWindow(title, toMarkdown(notes));
+    const didOpen = openPrintWindow(title, toMarkdown(notes));
+    if (!didOpen) {
+      showNotice({
+        tone: "warning",
+        title: "PDF export blocked",
+        message:
+          "Your browser blocked the print window. Allow pop-ups for Mila and try again.",
+      });
+    }
   };
 
   useEffect(() => {
@@ -864,13 +1245,29 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   }, []);
 
   return (
-    <main className="min-h-screen bg-[#0e1116] text-slate-100">
-      <div className="grid min-h-screen grid-cols-1 lg:grid-cols-[280px_1fr]">
-        <aside className="border-b border-white/10 bg-[#101821] px-5 py-5 lg:border-b-0 lg:border-r">
+    <main className="mila-app-bg min-h-screen lg:fixed lg:inset-0 lg:h-screen lg:overflow-hidden">
+      <div className="grid min-h-screen grid-cols-1 lg:h-screen lg:min-h-0 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <aside className="mila-sidebar border-b px-5 pb-5 pt-[calc(1.25rem+var(--mila-window-top-offset))] lg:h-full lg:min-h-0 lg:overflow-y-auto lg:border-b-0 lg:border-r">
           <BrandLogo />
           <AccountCard user={user} />
           <WorkspaceNav className="mt-5" />
           <div className="mt-6 space-y-5">
+            <MeetingBriefCard
+              disabled={
+                Boolean(session) ||
+                status === "connecting" ||
+                status === "recording" ||
+                status === "processing"
+              }
+              onStartCapture={startBriefCapture}
+            />
+
+            <ActionInboxCard
+              inbox={actionInbox}
+              loading={actionInboxLoading}
+              onRefresh={loadActionInbox}
+            />
+
             <TemplatePicker
               value={templateId}
               disabled={Boolean(session)}
@@ -881,7 +1278,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
             />
 
             <div>
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+              <label className="mila-eyebrow">
                 Output
               </label>
               <select
@@ -889,7 +1286,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
                 onChange={(event) =>
                   setOutputLanguage(event.target.value as SupportedLanguageCode)
                 }
-                className="mt-2 w-full rounded-md border border-white/10 bg-[#0d131b] px-3 py-2 text-sm text-white outline-none focus:border-emerald-400"
+                className="mila-focus mt-2 w-full rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] px-3 py-2 text-sm text-[var(--foreground)] outline-none"
               >
                 {supportedLanguages
                   .filter(
@@ -904,38 +1301,126 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
               </select>
             </div>
 
-            <div className="rounded-md border border-white/10 bg-white/[0.03] p-3">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-slate-400">Session</span>
-                <span className="inline-flex items-center gap-2 text-emerald-300">
-                  <Radio size={14} />
-                  {status}
+            <div className="rounded-lg border border-[var(--accent-border)] bg-[var(--accent-faint)] p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <div className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--accent)]">
+                    Capture
+                  </div>
+                  <p className="mila-muted mt-1 text-xs leading-5">
+                    Start a real meeting, run a demo chunk, or upload audio.
+                  </p>
+                </div>
+                <span className={statusBadgeClass(status)}>
+                  {formatSessionStatus(status)}
                 </span>
               </div>
-              <div className="mt-3 min-h-11 rounded bg-black/20 px-3 py-2 font-mono text-xs text-slate-400">
+              <div className="mt-3 space-y-2">
+                <button
+                  type="button"
+                  onClick={startRecording}
+                  className={primaryButtonClass}
+                  data-testid="start-mic"
+                >
+                  <Mic size={17} />
+                  Start live capture
+                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => stopRecording()}
+                    className={secondaryButtonClass}
+                  >
+                    <Square size={16} />
+                    Stop
+                  </button>
+                  <button
+                    type="button"
+                    onClick={simulateChunk}
+                    className={secondaryButtonClass}
+                  >
+                    <Play size={16} />
+                    Demo
+                  </button>
+                </div>
+                {capabilities.supportsRealAudio ? (
+                  <label className={secondaryLabelClass}>
+                    <Upload size={16} />
+                    Upload audio
+                    <input
+                      type="file"
+                      accept="audio/*,.ogg"
+                      className="sr-only"
+                      onChange={(event) => {
+                        void uploadAudio(event.target.files?.[0] ?? null);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={explainUploadUnavailable}
+                    className={secondaryButtonClass}
+                    data-testid="upload-unavailable"
+                  >
+                    <Upload size={16} />
+                    Upload audio
+                  </button>
+                )}
+              </div>
+            </div>
+
+            <div className="mila-surface-soft rounded-lg border p-3">
+              <div className="flex items-center justify-between text-sm">
+                <span className="mila-muted">Session</span>
+                <span className="inline-flex items-center gap-2 text-[var(--accent)]">
+                  <Radio size={14} />
+                  {formatSessionStatus(status)}
+                </span>
+              </div>
+              <div className="mila-muted mt-3 min-h-11 rounded-lg bg-black/20 px-3 py-2 font-mono text-xs">
                 {session?.id ?? "No active session"}
               </div>
             </div>
 
-            <div className="rounded-md border border-amber-300/20 bg-amber-300/[0.06] p-3 text-xs leading-5 text-amber-100">
+            <div
+              className={
+                capabilities.supportsRealAudio
+                  ? "rounded-lg border border-[var(--accent-border)] bg-[var(--accent-faint)] p-3 text-xs leading-5 text-[var(--foreground)]"
+                  : "rounded-lg border border-[rgba(255,155,124,0.25)] bg-[var(--warm-faint)] p-3 text-xs leading-5 text-[var(--foreground)]"
+              }
+            >
               <div className="flex items-center justify-between gap-2">
-                <span className="font-semibold text-amber-50">
+                <span
+                  className={
+                    capabilities.supportsRealAudio
+                      ? "font-semibold text-[var(--foreground)]"
+                      : "font-semibold text-[var(--foreground)]"
+                  }
+                >
                   ASR provider
                 </span>
                 <span className="rounded bg-black/20 px-2 py-0.5 font-mono">
                   {capabilities.asrProvider}
                 </span>
               </div>
-              <p className="mt-2 text-amber-100/80">
+              <p
+                className={
+                  capabilities.supportsRealAudio
+                    ? "mila-muted mt-2"
+                    : "mila-muted mt-2"
+                }
+              >
                 {capabilities.supportsRealAudio
-                  ? "Real audio transcription is enabled."
+                  ? "Real audio transcription is ready."
                   : "Demo mode only. Real mic, upload, Zoom, Meet, and calls need a real ASR worker."}
               </p>
             </div>
 
-            <div className="rounded-md border border-white/10 bg-white/[0.03] p-3">
+            <div className="mila-surface-soft rounded-lg border p-3">
               <div className="flex items-center justify-between text-sm">
-                <span className="inline-flex items-center gap-2 text-slate-400">
+                <span className="mila-muted inline-flex items-center gap-2">
                   <Radar size={15} />
                   Auto-start
                 </span>
@@ -943,7 +1428,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
                   type="button"
                   aria-pressed={autoStartEnabled}
                   onClick={toggleAutoStart}
-                  className="text-emerald-300 transition hover:text-emerald-100"
+                  className="text-[var(--accent)] transition hover:text-[var(--foreground)]"
                   title={
                     autoStartEnabled
                       ? "Disable auto-start"
@@ -958,17 +1443,17 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
                 </button>
               </div>
               <div className="mt-3 flex items-center justify-between gap-2 rounded bg-black/20 px-3 py-2 text-xs">
-                <span className="font-medium text-slate-400">
+                <span className="mila-muted font-medium">
                   {formatAutoStartStatus(autoStartStatus)}
                 </span>
-                <span className="rounded bg-white/5 px-2 py-0.5 text-slate-300">
+                <span className="mila-chip rounded px-2 py-0.5">
                   {autoStartSignal
                     ? formatProvider(autoStartSignal.provider)
                     : "No signal"}
                 </span>
               </div>
               {autoStartSignal && (
-                <div className="mt-2 truncate rounded bg-black/20 px-3 py-2 text-xs text-slate-500">
+                <div className="mila-muted mt-2 truncate rounded-lg bg-black/20 px-3 py-2 text-xs">
                   {autoStartSignal.title ??
                     autoStartSignal.meetingUrl ??
                     "Detected meeting"}
@@ -977,7 +1462,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
               <button
                 type="button"
                 onClick={triggerDemoMeetingSignal}
-                className="mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.07]"
+                className="mila-secondary mt-2 flex h-9 w-full items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold transition"
               >
                 <Radar size={15} />
                 Detect join
@@ -986,14 +1471,19 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
             <CaptureDiagnosticsCard
               autoStartSignal={autoStartSignal}
+              autoStartStatus={autoStartStatus}
+              capabilities={capabilities}
+              error={error}
               micPermission={micPermission}
+              segmentCount={segments.length}
+              status={status}
             />
 
             <div>
-              <label className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">
+              <label className="mila-eyebrow">
                 Transcript
               </label>
-              <div className="mt-2 grid grid-cols-2 rounded-md border border-white/10 bg-[#0d131b] p-1">
+              <div className="mt-2 grid grid-cols-2 rounded-lg border border-[var(--border)] bg-[var(--surface-soft)] p-1">
                 <button
                   type="button"
                   onClick={() => setMode("translated")}
@@ -1015,71 +1505,19 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <button
-                type="button"
-                onClick={startRecording}
-                className={primaryButtonClass}
-                data-testid="start-mic"
-              >
-                <Mic size={17} />
-                Start mic
-              </button>
-              <button
-                type="button"
-                onClick={stopRecording}
-                className={secondaryButtonClass}
-              >
-                <Square size={16} />
-                Stop
-              </button>
-              <button
-                type="button"
-                onClick={simulateChunk}
-                className={secondaryButtonClass}
-              >
-                <Play size={16} />
-                Simulate
-              </button>
-              {capabilities.supportsRealAudio ? (
-                <label className={secondaryLabelClass}>
-                  <Upload size={16} />
-                  Upload audio
-                  <input
-                    type="file"
-                    accept="audio/*,.ogg"
-                    className="sr-only"
-                    onChange={(event) => {
-                      void uploadAudio(event.target.files?.[0] ?? null);
-                      event.currentTarget.value = "";
-                    }}
-                  />
-                </label>
-              ) : (
-                <button
-                  type="button"
-                  onClick={explainUploadUnavailable}
-                  className={secondaryButtonClass}
-                  data-testid="upload-unavailable"
-                >
-                  <Upload size={16} />
-                  Upload audio
-                </button>
-              )}
-            </div>
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-col">
-          <header className="flex flex-col gap-4 border-b border-white/10 px-5 py-4 md:flex-row md:items-center md:justify-between">
+        <section className="mila-content-bg flex min-w-0 flex-col lg:h-full lg:min-h-0 lg:overflow-hidden">
+          <header className="flex flex-col gap-4 border-b border-[var(--border)] bg-[rgba(17,18,20,0.92)] px-5 py-4 backdrop-blur md:flex-row md:items-center md:justify-between">
             <div>
-              <div className="flex flex-wrap items-center gap-2 text-sm text-slate-400">
+              <div className="mila-muted flex flex-wrap items-center gap-2 text-sm">
                 <Languages size={16} />
                 {detectedLanguages.length ? (
                   detectedLanguages.map((language) => (
                     <span
                       key={language.code}
-                      className="rounded bg-white/5 px-2 py-1 text-xs text-slate-300"
+                      className="mila-chip rounded px-2 py-1 text-xs"
                     >
                       {language.nativeLabel}
                     </span>
@@ -1094,19 +1532,19 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex h-10 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 focus-within:border-emerald-400/60">
-                <Search size={16} className="text-slate-500" />
+              <div className="mila-focus flex h-10 items-center gap-2 rounded-lg border border-[var(--border)] bg-white/[0.035] px-3">
+                <Search size={16} className="text-[var(--muted-soft)]" />
                 <input
                   value={search}
                   onChange={(event) => setSearch(event.target.value)}
                   placeholder="Search transcript"
-                  className="w-40 bg-transparent text-sm text-white outline-none placeholder:text-slate-500"
+                  className="w-40 bg-transparent text-sm text-[var(--foreground)] outline-none placeholder:text-[var(--muted-soft)]"
                 />
               </div>
               <button
                 type="button"
                 onClick={openCommandPalette}
-                className="hidden h-10 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 text-xs font-medium text-slate-400 transition hover:bg-white/[0.07] hover:text-white md:inline-flex"
+                className="mila-secondary hidden h-10 items-center gap-2 rounded-lg border px-3 text-xs font-medium transition md:inline-flex"
                 title="Command palette"
               >
                 <Command size={13} />
@@ -1148,19 +1586,35 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
             </div>
           </header>
 
-          {error && (
-            <div className="border-b border-red-400/20 bg-red-500/10 px-5 py-3 text-sm text-red-100">
-              {error}
-            </div>
-          )}
+          {error ? (
+            <WorkspaceAlert
+              tone="error"
+              title="Mila needs your attention"
+              message={error}
+              onDismiss={() => setError(null)}
+            />
+          ) : notice ? (
+            <WorkspaceAlert
+              key={notice.id}
+              tone={notice.tone}
+              title={notice.title}
+              message={notice.message}
+              onDismiss={clearNotice}
+            />
+          ) : null}
 
-          <div className="grid flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
+          <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
             <TranscriptPanel
               segments={filteredSegments}
               mode={mode}
               isLive={status === "recording" || status === "connecting"}
+              transcriptionHealth={transcriptionHealth}
             />
-            <NotesPanel notes={notes} />
+            <NotesPanel
+              notes={notes}
+              segments={segments}
+              isLive={status === "recording" || status === "connecting"}
+            />
           </div>
         </section>
       </div>
@@ -1173,33 +1627,223 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   );
 }
 
+function WorkspaceAlert({
+  tone,
+  title,
+  message,
+  onDismiss,
+}: {
+  tone: NoticeTone;
+  title: string;
+  message: string;
+  onDismiss: () => void;
+}) {
+  const Icon =
+    tone === "error" ? AlertCircle : tone === "warning" ? Info : CheckCircle2;
+  const toneClass =
+    tone === "error"
+      ? "border-red-400/25 bg-red-500/[0.08] text-red-100"
+      : tone === "warning"
+      ? "border-[rgba(255,155,124,0.25)] bg-[var(--warm-faint)] text-[var(--foreground)]"
+      : "border-[var(--accent-border)] bg-[var(--accent-faint)] text-[var(--foreground)]";
+  const iconClass =
+    tone === "error"
+      ? "text-red-200"
+      : tone === "warning"
+        ? "text-[var(--warm)]"
+        : "text-[var(--accent)]";
+
+  return (
+    <div className={`border-b px-5 py-3 ${toneClass}`}>
+      <div className="flex items-start gap-3">
+        <Icon size={17} className={`mt-0.5 shrink-0 ${iconClass}`} />
+        <div className="min-w-0 flex-1">
+          <div className="text-sm font-semibold">{title}</div>
+          <div className="mt-0.5 text-sm leading-5 opacity-85">{message}</div>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          className="grid h-7 w-7 shrink-0 place-items-center rounded-md opacity-70 transition hover:bg-white/10 hover:opacity-100"
+          aria-label="Dismiss message"
+        >
+          <X size={15} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ActionInboxCard({
+  inbox,
+  loading,
+  onRefresh,
+}: {
+  inbox: MeetingActionInbox | null;
+  loading: boolean;
+  onRefresh: () => void;
+}) {
+  const items = inbox?.items.slice(0, 3) ?? [];
+  const openCount = inbox?.totalOpen ?? 0;
+
+  return (
+    <div className="mila-surface-soft rounded-lg border p-3 text-xs leading-5">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="inline-flex items-center gap-2 font-semibold text-[var(--foreground)]">
+            <ListTodo size={15} className="text-[var(--accent)]" />
+            Action inbox
+          </div>
+          <div className="mila-muted mt-1">
+            {loading
+              ? "Syncing follow-ups"
+              : inbox?.headline ?? "Follow-ups unavailable"}
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-[var(--border)] text-[var(--muted)] transition hover:border-[var(--accent-border)] hover:text-[var(--accent)] disabled:opacity-50"
+          disabled={loading}
+          title="Refresh action inbox"
+        >
+          <RefreshCw size={14} className={loading ? "animate-spin" : ""} />
+        </button>
+      </div>
+
+      <div className="mt-3 grid grid-cols-3 gap-2">
+        <ActionInboxMetric label="Open" value={openCount} />
+        <ActionInboxMetric label="Owner" value={inbox?.missingOwner ?? 0} />
+        <ActionInboxMetric label="Due" value={inbox?.missingDue ?? 0} />
+      </div>
+
+      {items.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {items.map((item) => (
+            <a
+              key={`${item.sessionId}:${item.id}`}
+              href={`/app?sessionId=${encodeURIComponent(item.sessionId)}`}
+              className="block rounded-lg border border-[var(--border)] bg-black/15 p-2 transition hover:border-[var(--accent-border)]"
+            >
+              <div className="flex items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <div className="line-clamp-2 font-medium text-[var(--foreground)]">
+                    {item.text}
+                  </div>
+                  <div className="mila-muted mt-1 truncate">
+                    {item.sessionTitle}
+                  </div>
+                </div>
+                <ArrowUpRight
+                  size={13}
+                  className="mt-0.5 shrink-0 text-[var(--accent)]"
+                />
+              </div>
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                <span className={actionInboxPillClass(item.missingOwner)}>
+                  {item.ownerLabel}
+                </span>
+                <span
+                  className={actionInboxPillClass(
+                    item.missingDue || item.overdue,
+                  )}
+                >
+                  {item.dueLabel}
+                </span>
+              </div>
+            </a>
+          ))}
+        </div>
+      ) : (
+        <div className="mila-muted mt-3 rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center">
+          {loading ? "Loading..." : "No open actions"}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActionInboxMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: number;
+}) {
+  return (
+    <div className="rounded-lg border border-[var(--border)] bg-black/15 px-2 py-1.5">
+      <div className="text-sm font-semibold text-[var(--foreground)]">
+        {value}
+      </div>
+      <div className="mila-muted text-[10px] uppercase tracking-wider">
+        {label}
+      </div>
+    </div>
+  );
+}
+
+function actionInboxPillClass(warning: boolean) {
+  return warning
+    ? "rounded bg-[var(--warm-faint)] px-2 py-0.5 text-[10px] font-medium text-[var(--warm)]"
+    : "mila-chip rounded px-2 py-0.5 text-[10px] font-medium";
+}
+
 function CaptureDiagnosticsCard({
   autoStartSignal,
+  autoStartStatus,
+  capabilities,
+  error,
   micPermission,
+  segmentCount,
+  status,
 }: {
   autoStartSignal: AutoStartSignal | null;
+  autoStartStatus: AutoStartStatus;
+  capabilities: AppCapabilities;
+  error: string | null;
   micPermission: MicPermissionState;
+  segmentCount: number;
+  status: SessionStatus;
 }) {
   const provider = autoStartSignal?.provider;
   const isMeet = provider === "google-meet";
+  const checks = buildCaptureHealth({
+    autoStartStatus,
+    capabilities,
+    error,
+    micPermission,
+    segmentCount,
+    status,
+  });
 
   return (
-    <div className="rounded-md border border-sky-300/20 bg-sky-300/[0.05] p-3 text-xs leading-5 text-sky-100">
+    <div className="mila-surface-soft rounded-lg border p-3 text-xs leading-5 text-[var(--foreground)]">
       <div className="flex items-center justify-between gap-2">
-        <span className="inline-flex items-center gap-2 font-semibold text-sky-50">
+        <span className="inline-flex items-center gap-2 font-semibold text-[var(--foreground)]">
           <Captions size={15} />
-          Capture path
+          Capture health
         </span>
-        <span className="rounded bg-black/20 px-2 py-0.5">
-          Mic {formatMicPermission(micPermission)}
+        <span className={captureHealthBadgeClass(checks.tone)}>
+          {checks.label}
         </span>
       </div>
-      <p className="mt-2 text-sky-100/80">
+      <p className="mila-muted mt-2">
         {isMeet
-          ? "Google Meet detection starts Mila. Your own speech needs mic permission in this app; Meet captions need the browser extension caption bridge and captions turned on in Meet."
-          : "The web app captures this page's microphone only. Other tabs, Zoom desktop, WhatsApp calls, and whole-device audio need the extension or desktop bridge."}
+          ? "Google Meet detection can start a session automatically. Keep captions or microphone access enabled for live capture."
+          : "Mila can capture this app's microphone directly. Desktop meeting detection starts sessions when a supported call is active."}
       </p>
-      {micPermission === "denied" && (
+      <div className="mt-3 space-y-1.5">
+        {checks.items.map((item) => (
+          <div
+            key={item.id}
+            className="flex items-center justify-between gap-2 rounded-md bg-black/15 px-2 py-1.5"
+          >
+            <span className="mila-muted">{item.label}</span>
+            <span className={captureCheckClass(item.tone)}>{item.value}</span>
+          </div>
+        ))}
+      </div>
+      {capabilities.supportsRealAudio && micPermission === "denied" && (
         <div className="mt-2 flex gap-2 rounded border border-red-300/20 bg-red-400/10 px-2 py-2 text-red-100">
           <ShieldAlert size={15} className="mt-0.5 shrink-0" />
           <span>
@@ -1212,27 +1856,139 @@ function CaptureDiagnosticsCard({
   );
 }
 
+function buildCaptureHealth({
+  autoStartStatus,
+  capabilities,
+  error,
+  micPermission,
+  segmentCount,
+  status,
+}: {
+  autoStartStatus: AutoStartStatus;
+  capabilities: AppCapabilities;
+  error: string | null;
+  micPermission: MicPermissionState;
+  segmentCount: number;
+  status: SessionStatus;
+}) {
+  const connectionTone =
+    status === "error" || error ? "warning" : status === "recording" ? "good" : "neutral";
+  const audioTone = capabilities.supportsRealAudio
+    ? micPermission === "denied" || micPermission === "unsupported"
+      ? "warning"
+      : micPermission === "granted"
+        ? "good"
+        : "neutral"
+    : "neutral";
+  const audioValue = capabilities.supportsRealAudio
+    ? formatMicPermission(micPermission)
+    : "not used in demo";
+  const transcriptionTone = capabilities.supportsRealAudio
+    ? "good"
+    : capabilities.supportsDemoAudio
+      ? "neutral"
+      : "warning";
+  const detectionTone =
+    autoStartStatus === "blocked"
+      ? "warning"
+      : autoStartStatus === "detected" || autoStartStatus === "watching"
+        ? "good"
+        : "neutral";
+  const warningCount = [
+    connectionTone,
+    audioTone,
+    transcriptionTone,
+    detectionTone,
+  ].filter((tone) => tone === "warning").length;
+
+  return {
+    tone: warningCount > 0 ? "warning" : status === "recording" ? "good" : "neutral",
+    label:
+      warningCount > 0
+        ? "Needs check"
+        : status === "recording"
+          ? "Healthy"
+          : "Ready",
+    items: [
+      {
+        id: "connection",
+        label: "Realtime",
+        value:
+          status === "recording"
+            ? "Connected"
+            : status === "connecting"
+              ? "Connecting"
+              : status === "error" || error
+                ? "Attention"
+                : "Standby",
+        tone: connectionTone,
+      },
+      {
+        id: "audio",
+        label: "Microphone",
+        value: audioValue,
+        tone: audioTone,
+      },
+      {
+        id: "transcription",
+        label: "ASR",
+        value: capabilities.supportsRealAudio
+          ? capabilities.asrProvider
+          : "demo only",
+        tone: transcriptionTone,
+      },
+      {
+        id: "segments",
+        label: "Transcript",
+        value: segmentCount ? `${segmentCount} segment${segmentCount === 1 ? "" : "s"}` : "waiting",
+        tone: segmentCount > 0 ? "good" : "neutral",
+      },
+      {
+        id: "detection",
+        label: "Auto-detect",
+        value: formatAutoStartStatus(autoStartStatus),
+        tone: detectionTone,
+      },
+    ],
+  };
+}
+
 function TranscriptPanel({
   segments,
   mode,
   isLive,
+  transcriptionHealth,
 }: {
   segments: TranscriptSegment[];
   mode: TranscriptMode;
   isLive: boolean;
+  transcriptionHealth: TranscriptionHealth;
 }) {
+  const isCatchingUp = isLive && transcriptionHealth === "catching-up";
+
   return (
-    <section className="min-h-[520px] overflow-y-auto border-b border-white/10 p-5 xl:border-b-0 xl:border-r">
+    <section className="min-h-[520px] overflow-y-auto border-b border-[var(--border)] p-5 xl:min-h-0 xl:border-b-0 xl:border-r">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+        <h2 className="mila-eyebrow">
           Live transcript
         </h2>
-        <span className="inline-flex items-center gap-2 text-xs text-slate-500">
-          {isLive ? (
+        <span
+          className={
+            isCatchingUp
+              ? "inline-flex items-center gap-2 rounded-full border border-[rgba(255,155,124,0.24)] bg-[var(--warm-faint)] px-2.5 py-1 text-xs font-medium text-[var(--warm)]"
+              : "mila-muted inline-flex items-center gap-2 text-xs"
+          }
+        >
+          {isCatchingUp ? (
+            <>
+              <RefreshCw size={12} className="animate-spin" />
+              Catching up
+            </>
+          ) : isLive ? (
             <>
               <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-75" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-300" />
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-[var(--accent)] opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-[var(--accent)]" />
               </span>
               Listening
             </>
@@ -1247,14 +2003,14 @@ function TranscriptPanel({
 
       <div className="space-y-3">
         {segments.length === 0 && (
-          <div className="flex flex-col items-center gap-3 rounded-lg border border-dashed border-white/10 bg-white/[0.02] px-6 py-12 text-center">
-            <div className="grid h-10 w-10 place-items-center rounded-full bg-emerald-400/10 text-emerald-300">
+          <div className="mila-surface-soft flex flex-col items-center gap-3 rounded-lg border border-dashed px-6 py-12 text-center">
+            <div className="grid h-10 w-10 place-items-center rounded-full border border-[var(--accent-border)] bg-[var(--accent-faint)] text-[var(--accent)]">
               <Sparkles size={18} />
             </div>
-            <p className="text-sm font-medium text-slate-200">
+            <p className="text-sm font-medium text-[var(--foreground)]">
               Listening for the first useful moment.
             </p>
-            <p className="max-w-xs text-xs leading-5 text-slate-500">
+            <p className="mila-muted max-w-xs text-xs leading-5">
               Start the mic, join an auto-detected meeting, or simulate a chunk
               to see Mila line up your transcript here.
             </p>
@@ -1269,19 +2025,19 @@ function TranscriptPanel({
           return (
             <article
               key={segment.id}
-              className="rounded-md border border-white/10 bg-[#121922] p-4 shadow-sm"
+              className="mila-surface-raised rounded-lg border p-4"
             >
-              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-500">
+              <div className="mila-muted mb-2 flex flex-wrap items-center gap-2 text-xs">
                 <span className="font-mono">{formatTime(segment.startMs)}</span>
                 <span>{segment.speakerId}</span>
-                <span className="rounded bg-emerald-400/10 px-2 py-0.5 text-emerald-200">
+                <span className="rounded bg-[var(--accent-faint)] px-2 py-0.5 text-[var(--accent)]">
                   {language.nativeLabel}
                 </span>
                 <span>{Math.round(segment.confidence * 100)}%</span>
               </div>
               <p
                 dir={mode === "original" ? segment.direction : "ltr"}
-                className="text-base leading-7 text-slate-100"
+                className="text-base leading-7 text-[var(--foreground)]"
               >
                 {displayText}
               </p>
@@ -1293,7 +2049,23 @@ function TranscriptPanel({
   );
 }
 
-function NotesPanel({ notes }: { notes: MeetingNotes }) {
+function NotesPanel({
+  notes,
+  segments,
+  isLive,
+}: {
+  notes: MeetingNotes;
+  segments: TranscriptSegment[];
+  isLive: boolean;
+}) {
+  const actionReview = useMemo(
+    () => buildMeetingActionReview(notes),
+    [notes],
+  );
+  const liveCoach = useMemo(
+    () => buildLiveMeetingCoach({ notes, segments, isLive }),
+    [isLive, notes, segments],
+  );
   const hasContent =
     Boolean(notes.summary?.trim()) ||
     notes.keyPoints.length > 0 ||
@@ -1301,13 +2073,13 @@ function NotesPanel({ notes }: { notes: MeetingNotes }) {
     notes.decisions.length > 0;
 
   return (
-    <section className="overflow-y-auto bg-[#0b0f14] p-5">
+    <section className="min-h-0 overflow-y-auto bg-black/[0.12] p-5">
       <div className="mb-4 flex items-center justify-between">
-        <h2 className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">
+        <h2 className="mila-eyebrow">
           Notes
         </h2>
         <span
-          className="font-mono text-[11px] text-slate-600"
+          className="font-mono text-[11px] text-[var(--muted-soft)]"
           suppressHydrationWarning
           title="Last updated"
         >
@@ -1316,11 +2088,11 @@ function NotesPanel({ notes }: { notes: MeetingNotes }) {
       </div>
 
       {!hasContent && (
-        <div className="mb-4 rounded-lg border border-dashed border-white/10 bg-white/[0.02] px-5 py-8 text-center">
-          <p className="text-sm font-medium text-slate-200">
+        <div className="mila-surface-soft mb-4 rounded-lg border border-dashed px-5 py-8 text-center">
+          <p className="text-sm font-medium text-[var(--foreground)]">
             Notes appear as the conversation unfolds.
           </p>
-          <p className="mt-1 text-xs leading-5 text-slate-500">
+          <p className="mila-muted mt-1 text-xs leading-5">
             Mila summarises the meeting, pulls out key points, decisions, and
             action items in your selected output language.
           </p>
@@ -1328,9 +2100,11 @@ function NotesPanel({ notes }: { notes: MeetingNotes }) {
       )}
 
       <div className="space-y-4">
+        <LiveCoachPanel coach={liveCoach} />
+        <ActionCenterCard review={actionReview} />
         <NoteBlock title="Summary">
           {notes.summary?.trim() ? (
-            <p className="text-sm leading-6 text-slate-300">{notes.summary}</p>
+            <p className="mila-muted text-sm leading-6">{notes.summary}</p>
           ) : (
             <EmptyHint text="A short paragraph capturing the meeting will land here." />
           )}
@@ -1347,9 +2121,9 @@ function NotesPanel({ notes }: { notes: MeetingNotes }) {
               {notes.actionItems.map((item) => (
                 <li
                   key={item.id}
-                  className="flex gap-2 text-sm leading-6 text-slate-300"
+                  className="mila-muted flex gap-2 text-sm leading-6"
                 >
-                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-300" />
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warm)]" />
                   <span>{formatAction(item)}</span>
                 </li>
               ))}
@@ -1369,9 +2143,210 @@ function NotesPanel({ notes }: { notes: MeetingNotes }) {
   );
 }
 
+function LiveCoachPanel({ coach }: { coach: LiveMeetingCoach }) {
+  return (
+    <section
+      className="mila-surface-raised rounded-lg border p-4"
+      data-testid="live-coach"
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <div className="inline-flex items-center gap-2 text-sm font-semibold text-[var(--foreground)]">
+            <BrainCircuit size={16} className="text-[var(--accent)]" />
+            Live coach
+          </div>
+          <p className="mila-muted mt-1 text-xs leading-5">
+            {coach.headline}
+          </p>
+        </div>
+        <span className={liveCoachStateClass(coach.state)}>
+          {formatLiveCoachState(coach.state)}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-4 gap-2">
+        {coach.metrics.map((metric) => (
+          <div
+            key={metric.id}
+            className="rounded-md border border-[var(--border)] bg-black/15 px-2 py-2"
+          >
+            <div className={liveCoachMetricClass(metric.tone)}>
+              {metric.value}
+            </div>
+            <div className="mila-muted mt-0.5 truncate text-[10px] uppercase tracking-wider">
+              {metric.label}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-3 rounded-md border border-[var(--accent-border)] bg-[var(--accent-faint)] px-3 py-2 text-xs leading-5 text-[var(--foreground)]">
+        {coach.nextBestPrompt}
+      </div>
+
+      {coach.cards.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {coach.cards.map((card) => (
+            <LiveCoachCardView key={card.id} card={card} />
+          ))}
+        </div>
+      ) : (
+        <div className="mila-muted mt-3 rounded-lg border border-dashed border-[var(--border)] px-3 py-4 text-center text-xs">
+          Coach prompts appear when Mila sees decisions, questions, owners, or
+          deadlines worth tightening.
+        </div>
+      )}
+    </section>
+  );
+}
+
+function LiveCoachCardView({ card }: { card: LiveCoachCardModel }) {
+  return (
+    <article
+      className="rounded-md border border-[var(--border)] bg-black/10 px-3 py-3"
+      data-testid={`live-coach-card-${card.kind}`}
+    >
+      <div className="flex gap-3">
+        <div className={liveCoachIconClass(card.tone)}>
+          <LiveCoachIcon kind={card.kind} />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-[var(--foreground)]">
+              {card.title}
+            </h3>
+            <span className={liveCoachTonePillClass(card.tone)}>
+              {formatLiveCoachTone(card.tone)}
+            </span>
+          </div>
+          <p className="mila-muted mt-1 text-xs leading-5">{card.detail}</p>
+          {card.evidence ? (
+            <p className="mt-2 line-clamp-2 rounded bg-black/15 px-2 py-1.5 text-[11px] leading-4 text-[var(--muted-soft)]">
+              {card.evidence}
+            </p>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              void copyTextToClipboard(card.suggestion);
+            }}
+            className="mila-secondary mt-2 inline-flex h-8 items-center gap-2 rounded-md border px-2.5 text-xs font-semibold transition"
+            title="Copy coach prompt"
+          >
+            <Clipboard size={13} />
+            {card.actionLabel}
+          </button>
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function LiveCoachIcon({ kind }: { kind: LiveCoachCardModel["kind"] }) {
+  switch (kind) {
+    case "owner-check":
+      return <UsersRound size={15} />;
+    case "date-check":
+      return <CalendarClock size={15} />;
+    case "decision-check":
+      return <CheckCircle2 size={15} />;
+    case "open-question":
+      return <MessageCircleQuestion size={15} />;
+    case "language-shift":
+      return <Languages size={15} />;
+    case "participation":
+      return <UsersRound size={15} />;
+    case "catch-up":
+    default:
+      return <Sparkles size={15} />;
+  }
+}
+
+function ActionCenterCard({
+  review,
+}: {
+  review: ReturnType<typeof buildMeetingActionReview>;
+}) {
+  return (
+    <section className="mila-surface-raised rounded-lg border p-4">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-[var(--foreground)]">
+            Action center
+          </h3>
+          <p className="mila-muted mt-1 text-xs leading-5">
+            {review.headline}
+          </p>
+        </div>
+        <span className={actionRiskClass(review.riskLevel)}>
+          {formatActionRisk(review.riskLevel)}
+        </span>
+      </div>
+
+      <div className="mt-3 grid grid-cols-2 gap-2">
+        {review.metrics.map((metric) => (
+          <div
+            key={metric.id}
+            className="rounded-md border border-[var(--border)] bg-black/15 px-3 py-2"
+          >
+            <div className={actionMetricValueClass(metric.tone)}>
+              {metric.value}
+            </div>
+            <div className="mila-muted mt-0.5 text-[11px]">{metric.label}</div>
+          </div>
+        ))}
+      </div>
+
+      <p className="mt-3 rounded-md border border-[var(--accent-border)] bg-[var(--accent-faint)] px-3 py-2 text-xs leading-5 text-[var(--foreground)]">
+        {review.nextBestAction}
+      </p>
+
+      {review.topActions.length > 0 ? (
+        <div className="mt-3 space-y-2">
+          {review.topActions.map((item) => (
+            <div
+              key={item.id}
+              className="rounded-md border border-[var(--border)] bg-black/10 px-3 py-2"
+            >
+              <div className="flex items-start gap-2">
+                <span
+                  className={
+                    item.status === "done"
+                      ? "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]"
+                      : item.overdue || item.missingOwner || item.missingDue
+                        ? "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warm)]"
+                        : "mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]"
+                  }
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm leading-5 text-[var(--foreground)]">
+                    {item.text}
+                  </p>
+                  <p className="mila-muted mt-1 text-[11px]">
+                    {item.ownerLabel} · {item.dueLabel}
+                  </p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <details className="mt-3 rounded-md border border-[var(--border)] bg-black/10">
+        <summary className="cursor-pointer px-3 py-2 text-xs font-semibold text-[var(--foreground)]">
+          Follow-up draft
+        </summary>
+        <pre className="mila-muted whitespace-pre-wrap border-t border-[var(--border)] px-3 py-3 text-xs leading-5">
+          {review.followUpDraft}
+        </pre>
+      </details>
+    </section>
+  );
+}
+
 function EmptyHint({ text }: { text: string }) {
   return (
-    <p className="text-xs leading-5 text-slate-500">{text}</p>
+    <p className="mila-muted text-xs leading-5">{text}</p>
   );
 }
 
@@ -1383,8 +2358,10 @@ function NoteBlock({
   children: React.ReactNode;
 }) {
   return (
-    <section className="rounded-md border border-white/10 bg-white/[0.03] p-4">
-      <h3 className="mb-3 text-sm font-semibold text-white">{title}</h3>
+    <section className="mila-surface-soft rounded-lg border p-4">
+      <h3 className="mb-3 text-sm font-semibold text-[var(--foreground)]">
+        {title}
+      </h3>
       {children}
     </section>
   );
@@ -1398,13 +2375,75 @@ function BulletList({ items, empty }: { items: string[]; empty: string }) {
   return (
     <ul className="space-y-2">
       {items.map((item) => (
-        <li key={item} className="flex gap-2 text-sm leading-6 text-slate-300">
-          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-emerald-300" />
+        <li key={item} className="mila-muted flex gap-2 text-sm leading-6">
+          <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
           <span>{item}</span>
         </li>
       ))}
     </ul>
   );
+}
+
+function isProtocolNoise(event: ServerErrorEvent) {
+  return (
+    event.code === "BAD_EVENT" ||
+    /invalid meeting stream event/i.test(event.message)
+  );
+}
+
+function isRecoverableTranscriptionEvent(
+  event: ServerErrorEvent | ServerStatusEvent,
+) {
+  return event.code === "ASR_TIMEOUT" || event.code === "ASR_ERROR";
+}
+
+function formatFatalServerError(event: ServerErrorEvent) {
+  if (event.code === "UNAUTHENTICATED") {
+    return "Your session expired. Sign in again to continue recording.";
+  }
+
+  if (event.code === "SESSION_NOT_FOUND") {
+    return "This meeting session could not be found. Start a new session from the workspace.";
+  }
+
+  return event.message.replace(/^Meeting stream error:\s*/i, "");
+}
+
+function formatSessionStatus(status: SessionStatus) {
+  switch (status) {
+    case "connecting":
+      return "Connecting";
+    case "recording":
+      return "Recording";
+    case "processing":
+      return "Processing";
+    case "paused":
+      return "Paused";
+    case "error":
+      return "Needs attention";
+    case "idle":
+    default:
+      return "Ready";
+  }
+}
+
+function statusBadgeClass(status: SessionStatus) {
+  const base =
+    "shrink-0 rounded-full px-2.5 py-1 text-[11px] font-semibold uppercase tracking-[0.12em]";
+
+  if (status === "recording") {
+    return `${base} bg-[var(--accent-faint)] text-[var(--accent)]`;
+  }
+
+  if (status === "connecting" || status === "processing") {
+    return `${base} bg-[rgba(103,232,249,0.1)] text-[var(--accent)]`;
+  }
+
+  if (status === "error") {
+    return `${base} bg-red-300/15 text-red-200`;
+  }
+
+  return `${base} bg-white/5 text-[var(--muted)]`;
 }
 
 function normalizeLanguage(value: string): SupportedLanguageCode {
@@ -1429,7 +2468,11 @@ function formatTime(milliseconds: number) {
 }
 
 function formatAction(item: ActionItem) {
-  return item.owner ? `${item.owner}: ${item.text}` : item.text;
+  const parts = [
+    item.owner ? `${item.owner}: ${item.text}` : item.text,
+    item.due ? `due ${item.due}` : null,
+  ].filter(Boolean);
+  return parts.join(" · ");
 }
 
 function toExternalMeetingContext(
@@ -1476,14 +2519,69 @@ function getUrlSessionId(): string | null {
   return readString(params.get("sessionId")) ?? null;
 }
 
+function replaceAutoStartUrlWithSession(sessionId: string) {
+  const params = new URLSearchParams(window.location.search);
+  const autoStart = parseBoolean(
+    params.get("autostart") ?? params.get("autoStart"),
+  );
+
+  if (!autoStart || getUrlSessionId()) return;
+
+  window.history.replaceState(
+    null,
+    "",
+    `/app?sessionId=${encodeURIComponent(sessionId)}`,
+  );
+}
+
 function getStoredAutoStartSignal(): AutoStartSignal | null {
   try {
-    return parseStoredAutoStartSignal(
+    const signal = parseStoredAutoStartSignal(
       window.localStorage.getItem("mila:meeting-signal"),
     );
+    if (!signal) return null;
+    if (!isFreshAutoStartSignal(signal)) {
+      clearStoredAutoStartSignal();
+      return null;
+    }
+    return signal;
   } catch {
     return null;
   }
+}
+
+function clearStoredAutoStartSignal() {
+  try {
+    window.localStorage.removeItem("mila:meeting-signal");
+  } catch {
+    // Ignore storage failures; the in-memory duplicate guard still applies.
+  }
+}
+
+function isFreshAutoStartSignal(signal: AutoStartSignal) {
+  const detectedAt = Date.parse(signal.detectedAt);
+  if (Number.isNaN(detectedAt)) return true;
+  return Date.now() - detectedAt <= STORED_AUTO_START_SIGNAL_TTL_MS;
+}
+
+function takePendingWorkspaceCommand(): DesktopWorkspaceCommand | null {
+  try {
+    const command = window.sessionStorage.getItem(PENDING_WORKSPACE_COMMAND_KEY);
+    window.sessionStorage.removeItem(PENDING_WORKSPACE_COMMAND_KEY);
+    return isDesktopWorkspaceCommand(command) ? command : null;
+  } catch {
+    return null;
+  }
+}
+
+function isDesktopWorkspaceCommand(
+  command: string | null,
+): command is DesktopWorkspaceCommand {
+  return (
+    command === "mila:desktop-new-meeting" ||
+    command === "mila:desktop-start-mic" ||
+    command === "mila:desktop-stop-mic"
+  );
 }
 
 function parseStoredAutoStartSignal(
@@ -1681,6 +2779,120 @@ function formatMicPermission(permission: MicPermissionState) {
   return labels[permission];
 }
 
+function captureHealthBadgeClass(tone: string) {
+  const base = "rounded px-2 py-0.5 font-semibold";
+  if (tone === "good") {
+    return `${base} border border-[var(--accent-border)] bg-[var(--accent-faint)] text-[var(--accent)]`;
+  }
+  if (tone === "warning") {
+    return `${base} border border-[rgba(255,155,124,0.3)] bg-[var(--warm-faint)] text-[var(--warm)]`;
+  }
+  return `${base} mila-chip`;
+}
+
+function captureCheckClass(tone: string) {
+  if (tone === "good") return "font-medium text-[var(--accent)]";
+  if (tone === "warning") return "font-medium text-[var(--warm)]";
+  return "font-medium text-[var(--foreground)]";
+}
+
+function actionRiskClass(risk: ReturnType<typeof buildMeetingActionReview>["riskLevel"]) {
+  const base =
+    "shrink-0 rounded px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]";
+  if (risk === "clear") {
+    return `${base} border border-[var(--accent-border)] bg-[var(--accent-faint)] text-[var(--accent)]`;
+  }
+  if (risk === "empty") {
+    return `${base} mila-chip`;
+  }
+  return `${base} border border-[rgba(255,155,124,0.3)] bg-[var(--warm-faint)] text-[var(--warm)]`;
+}
+
+function formatActionRisk(
+  risk: ReturnType<typeof buildMeetingActionReview>["riskLevel"],
+) {
+  const labels: Record<
+    ReturnType<typeof buildMeetingActionReview>["riskLevel"],
+    string
+  > = {
+    empty: "Watching",
+    clear: "Ready",
+    "needs-owners": "Owners",
+    "needs-dates": "Dates",
+    overloaded: "Triage",
+  };
+
+  return labels[risk];
+}
+
+function actionMetricValueClass(tone: string) {
+  if (tone === "good") return "text-lg font-semibold text-[var(--accent)]";
+  if (tone === "warning") return "text-lg font-semibold text-[var(--warm)]";
+  return "text-lg font-semibold text-[var(--foreground)]";
+}
+
+function liveCoachStateClass(state: LiveMeetingCoach["state"]) {
+  const base =
+    "shrink-0 rounded px-2 py-1 text-[10px] font-semibold uppercase tracking-[0.12em]";
+  if (state === "coaching") {
+    return `${base} border border-[var(--accent-border)] bg-[var(--accent-faint)] text-[var(--accent)]`;
+  }
+  if (state === "empty") {
+    return `${base} mila-chip`;
+  }
+  return `${base} border border-[rgba(255,155,124,0.3)] bg-[var(--warm-faint)] text-[var(--warm)]`;
+}
+
+function formatLiveCoachState(state: LiveMeetingCoach["state"]) {
+  const labels: Record<LiveMeetingCoach["state"], string> = {
+    empty: "Waiting",
+    "warming-up": "Warming",
+    coaching: "Live",
+    review: "Review",
+  };
+
+  return labels[state];
+}
+
+function liveCoachMetricClass(tone: LiveCoachCardModel["tone"]) {
+  if (tone === "good") return "text-sm font-semibold text-[var(--accent)]";
+  if (tone === "warning") return "text-sm font-semibold text-[var(--warm)]";
+  return "text-sm font-semibold text-[var(--foreground)]";
+}
+
+function liveCoachIconClass(tone: LiveCoachCardModel["tone"]) {
+  const base =
+    "mt-0.5 grid h-8 w-8 shrink-0 place-items-center rounded-md border";
+  if (tone === "warning") {
+    return `${base} border-[rgba(255,155,124,0.3)] bg-[var(--warm-faint)] text-[var(--warm)]`;
+  }
+  if (tone === "good") {
+    return `${base} border-[var(--accent-border)] bg-[var(--accent-faint)] text-[var(--accent)]`;
+  }
+  return `${base} border-[var(--border)] bg-white/[0.04] text-[var(--muted)]`;
+}
+
+function liveCoachTonePillClass(tone: LiveCoachCardModel["tone"]) {
+  const base = "rounded px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider";
+  if (tone === "warning") {
+    return `${base} bg-[var(--warm-faint)] text-[var(--warm)]`;
+  }
+  if (tone === "good") {
+    return `${base} bg-[var(--accent-faint)] text-[var(--accent)]`;
+  }
+  return `${base} mila-chip`;
+}
+
+function formatLiveCoachTone(tone: LiveCoachCardModel["tone"]) {
+  const labels: Record<LiveCoachCardModel["tone"], string> = {
+    good: "Context",
+    info: "Prompt",
+    warning: "Close gap",
+  };
+
+  return labels[tone];
+}
+
 async function queryMicrophonePermission(): Promise<MicPermissionState> {
   if (!navigator.mediaDevices?.getUserMedia) {
     return "unsupported";
@@ -1714,10 +2926,24 @@ function describeCaptureError(error: unknown) {
     /permission denied|notallowederror|permission dismissed/i.test(message);
 
   if (permissionDenied) {
+    const origin =
+      typeof window !== "undefined" ? window.location.origin : "this app";
     return {
       permissionDenied: true,
       message:
-        "Microphone permission is denied for Mila. Google Meet permission does not transfer to this app; allow microphone for http://localhost:3002 and for the browser in system privacy settings, then try Start mic again.",
+        `Microphone permission is denied for Mila. Google Meet permission does not transfer to this app; allow microphone access for ${origin} and for the browser in system privacy settings, then try Start mic again.`,
+    };
+  }
+
+  if (
+    /failed to fetch|fetch failed|networkerror|load failed|econnrefused/i.test(
+      message,
+    )
+  ) {
+    return {
+      permissionDenied: false,
+      message:
+        "Mila opened the meeting workspace, but the backend is not reachable. Start the backend and ASR stack, or update the API URL in Preferences before taking live notes.",
     };
   }
 
@@ -1725,6 +2951,26 @@ function describeCaptureError(error: unknown) {
     permissionDenied: false,
     message: error instanceof Error ? error.message : "Recording failed",
   };
+}
+
+async function readApiError(response: Response, fallback: string) {
+  if (response.status === 401) {
+    return "Your session expired. Sign in again to continue.";
+  }
+
+  try {
+    const data = (await response.json()) as { message?: string | string[] };
+    if (Array.isArray(data.message) && data.message.length > 0) {
+      return data.message.join(" ");
+    }
+    if (typeof data.message === "string" && data.message.trim()) {
+      return data.message;
+    }
+  } catch {
+    // Keep the fallback below. Some failures return an empty or non-JSON body.
+  }
+
+  return `${fallback} (${response.status})`;
 }
 
 type AudioContextConstructor = {
@@ -1907,7 +3153,7 @@ function markdownToHtml(markdown: string) {
 
 function openPrintWindow(title: string, markdown: string) {
   const printWindow = window.open("", "_blank", "width=800,height=900");
-  if (!printWindow) return;
+  if (!printWindow) return false;
   const body = markdownToHtml(markdown);
   printWindow.document.write(`<!doctype html>
 <html><head><meta charset="utf-8"><title>${escapeHtml(title)}</title>
@@ -1922,6 +3168,7 @@ function openPrintWindow(title: string, markdown: string) {
 </style></head>
 <body>${body}<script>window.onload=function(){window.print();}</script></body></html>`);
   printWindow.document.close();
+  return true;
 }
 
 function blobToBase64(blob: Blob) {
@@ -1937,13 +3184,13 @@ function blobToBase64(blob: Blob) {
 }
 
 const primaryButtonClass =
-  "flex h-10 w-full items-center justify-center gap-2 rounded-md bg-emerald-300 px-3 text-sm font-semibold text-slate-950 transition hover:bg-emerald-200";
+  "mila-primary flex h-10 w-full items-center justify-center gap-2 rounded-lg px-3 text-sm font-semibold transition";
 const secondaryButtonClass =
-  "flex h-10 w-full items-center justify-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 text-sm font-semibold text-slate-200 transition hover:bg-white/[0.07]";
+  "mila-secondary flex h-10 w-full items-center justify-center gap-2 rounded-lg border px-3 text-sm font-semibold transition";
 const secondaryLabelClass = `${secondaryButtonClass} cursor-pointer`;
 const segmentClass =
-  "rounded px-3 py-1.5 text-sm font-medium text-slate-500 transition";
+  "rounded-md px-3 py-1.5 text-sm font-medium text-[var(--muted-soft)] transition";
 const activeSegmentClass =
-  "rounded bg-white/10 px-3 py-1.5 text-sm font-medium text-white shadow-sm";
+  "rounded-md bg-[var(--accent-faint)] px-3 py-1.5 text-sm font-semibold text-[var(--accent)] shadow-sm";
 const pillButtonClass =
-  "inline-flex h-10 items-center gap-2 rounded-md border border-white/10 bg-white/[0.03] px-3 text-sm font-medium text-slate-200 transition hover:bg-white/[0.07] hover:text-white";
+  "mila-secondary inline-flex h-10 items-center gap-2 rounded-lg border px-3 text-sm font-medium transition";

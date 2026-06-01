@@ -4,25 +4,50 @@
 
 :root,
 .dark {
-  --background: #0e1116;
-  --foreground: #eef4f8;
-  --surface: #121922;
-  --surface-soft: #101821;
-  --border: rgba(255, 255, 255, 0.08);
-  --muted: #94a3b8;
-  --selection-bg: #34d399;
-  --selection-fg: #0e1116;
+  --mila-window-top-offset: 0px;
+  --background: #0f1012;
+  --foreground: #f4f1ec;
+  --surface: #18191e;
+  --surface-soft: #131417;
+  --surface-raised: #202127;
+  --border: rgba(244, 241, 236, 0.11);
+  --muted: #a6a29b;
+  --muted-soft: #777c82;
+  --accent: #67e8f9;
+  --accent-strong: #22d3ee;
+  --accent-faint: rgba(103, 232, 249, 0.12);
+  --accent-border: rgba(103, 232, 249, 0.34);
+  --accent-contrast: #061113;
+  --warm: #ff9b7c;
+  --warm-faint: rgba(255, 155, 124, 0.12);
+  --gold: #f4d35e;
+  --selection-bg: #67e8f9;
+  --selection-fg: #061113;
+}
+
+html[data-mila-shell="electron"][data-mila-platform="darwin"] {
+  --mila-window-top-offset: 28px;
 }
 
 .light {
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --background: #fbfaf7;
+  --foreground: #151411;
   --surface: #ffffff;
-  --surface-soft: #f1f5f9;
-  --border: rgba(15, 23, 42, 0.08);
-  --muted: #475569;
-  --selection-bg: #10b981;
-  --selection-fg: #f8fafc;
+  --surface-soft: #f2f0eb;
+  --surface-raised: #ffffff;
+  --border: rgba(21, 20, 17, 0.11);
+  --muted: #625f59;
+  --muted-soft: #8a867e;
+  --accent: #0891b2;
+  --accent-strong: #0e7490;
+  --accent-faint: rgba(8, 145, 178, 0.1);
+  --accent-border: rgba(8, 145, 178, 0.28);
+  --accent-contrast: #f8feff;
+  --warm: #c75d43;
+  --warm-faint: rgba(199, 93, 67, 0.1);
+  --gold: #b98900;
+  --selection-bg: #0891b2;
+  --selection-fg: #ffffff;
 }
 
 @theme inline {
@@ -48,6 +73,101 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: "Geist", "Geist Fallback", ui-sans-serif, system-ui, sans-serif;
+}
+
+@layer utilities {
+  .mila-app-bg {
+    background:
+      radial-gradient(circle at 18% 0%, rgba(103, 232, 249, 0.1), transparent 34rem),
+      radial-gradient(circle at 88% 12%, rgba(255, 155, 124, 0.08), transparent 28rem),
+      var(--background);
+    color: var(--foreground);
+  }
+
+  .mila-content-bg {
+    background:
+      linear-gradient(180deg, rgba(255, 255, 255, 0.018), transparent 24rem),
+      #111214;
+  }
+
+  .mila-sidebar {
+    background:
+      linear-gradient(180deg, rgba(32, 33, 39, 0.98), rgba(18, 19, 22, 0.98)),
+      var(--surface-soft);
+    border-color: var(--border);
+  }
+
+  .mila-surface {
+    background: var(--surface);
+    border-color: var(--border);
+  }
+
+  .mila-surface-soft {
+    background: rgba(244, 241, 236, 0.035);
+    border-color: var(--border);
+  }
+
+  .mila-surface-raised {
+    background: var(--surface-raised);
+    border-color: var(--border);
+    box-shadow: 0 18px 44px rgba(0, 0, 0, 0.2);
+  }
+
+  .mila-primary {
+    background: var(--accent);
+    color: var(--accent-contrast);
+  }
+
+  .mila-primary:hover {
+    background: #8ff2fb;
+  }
+
+  .mila-secondary {
+    background: rgba(244, 241, 236, 0.04);
+    border-color: var(--border);
+    color: var(--foreground);
+  }
+
+  .mila-secondary:hover {
+    background: rgba(244, 241, 236, 0.075);
+    border-color: var(--accent-border);
+  }
+
+  .mila-focus {
+    outline: none;
+  }
+
+  .mila-focus:focus,
+  .mila-focus:focus-within {
+    border-color: var(--accent-border);
+    box-shadow: 0 0 0 1px var(--accent-border);
+  }
+
+  .mila-eyebrow {
+    color: var(--muted-soft);
+    font-size: 0.75rem;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+  }
+
+  .mila-muted {
+    color: var(--muted);
+  }
+
+  .mila-accent {
+    color: var(--accent);
+  }
+
+  .mila-warm {
+    color: var(--warm);
+  }
+
+  .mila-chip {
+    background: rgba(244, 241, 236, 0.045);
+    border: 1px solid var(--border);
+    color: var(--muted);
+  }
 }
 
 button,

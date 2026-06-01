@@ -124,6 +124,11 @@ export function clearPreferences() {
   window.dispatchEvent(new Event("mila:preferences-changed"));
 }
 
+// Intentionally empty by default: the browser calls its own same-origin
+// `/api/*` route handlers (a BFF that injects the session token and proxies to
+// the backend at MILA_API_INTERNAL_URL server-side). Non-browser shells like
+// Electron set `preferences.apiUrl` so they hit the backend directly instead.
+// A hosted browser deploy can set NEXT_PUBLIC_API_BASE_URL to bypass the BFF.
 const DEFAULT_API_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 const DEFAULT_WS_URL =
   process.env.NEXT_PUBLIC_API_WS_URL ?? "ws://localhost:4000/meetings/live";

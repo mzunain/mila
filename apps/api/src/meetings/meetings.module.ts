@@ -9,6 +9,7 @@ import { HttpAsrProvider } from './providers/http-asr.provider';
 import { MockAsrProvider } from './providers/mock-asr.provider';
 import { NotesEngineService } from './notes-engine.service';
 import { LiveAssistService } from './live-assist.service';
+import { resolveAsrMode } from '../asr-config';
 
 const asrProviderFactory = {
   provide: ASR_PROVIDER,
@@ -19,7 +20,7 @@ const asrProviderFactory = {
     return new DemoAwareAsrProvider(
       mockAsrProvider,
       httpAsrProvider,
-      process.env.ASR_PROVIDER === 'http',
+      resolveAsrMode().isReal,
     );
   },
   inject: [MockAsrProvider, HttpAsrProvider],

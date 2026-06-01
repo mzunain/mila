@@ -1,10 +1,10 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { utilityProcess, type UtilityProcess } from 'electron';
 import { createServer } from 'node:net';
 import path from 'node:path';
 import fs from 'node:fs';
 import { WEB_BUNDLE_DIR, ENTRY_PATH } from './config';
 
-let serverProcess: ChildProcess | null = null;
+let serverProcess: UtilityProcess | null = null;
 
 function findFreePort(): Promise<number> {
   return new Promise((resolve, reject) => {
@@ -53,17 +53,16 @@ export async function startEmbeddedServer(env: Record<string, string>): Promise<
   const port = await findFreePort();
   const hostname = '127.0.0.1';
 
-  serverProcess = spawn(process.execPath, [serverEntry], {
+  serverProcess = utilityProcess.fork(serverEntry, [], {
     cwd: WEB_BUNDLE_DIR,
     env: {
       ...process.env,
       ...env,
       PORT: String(port),
       HOSTNAME: hostname,
-      // Electron sets ELECTRON_RUN_AS_NODE so the bundled Node child runs as plain Node.
-      ELECTRON_RUN_AS_NODE: '1',
     },
-    stdio: ['ignore', 'pipe', 'pipe'],
+    serviceName: 'Mila Embedded Web Server',
+    stdio: 'pipe',
   });
 
   serverProcess.stdout?.on('data', (chunk) => {
@@ -72,8 +71,8 @@ export async function startEmbeddedServer(env: Record<string, string>): Promise<
   serverProcess.stderr?.on('data', (chunk) => {
     process.stderr.write(`[next!] ${chunk}`);
   });
-  serverProcess.on('exit', (code, signal) => {
-    console.error(`[next] embedded server exited code=${code} signal=${signal}`);
+  serverProcess.on('exit', (code) => {
+    console.error(`[next] embedded server exited code=${code}`);
     serverProcess = null;
   });
 
@@ -83,8 +82,8 @@ export async function startEmbeddedServer(env: Record<string, string>): Promise<
 }
 
 export function stopEmbeddedServer(): void {
-  if (serverProcess && !serverProcess.killed) {
-    serverProcess.kill('SIGTERM');
+  if (serverProcess) {
+    serverProcess.kill();
     serverProcess = null;
   }
 }

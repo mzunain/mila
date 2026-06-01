@@ -158,6 +158,13 @@ locations on Windows/Linux).
 | `startMinimized`| `false`                                      |
 | `windowBounds`  | last position + size                         |
 
+## Menu bar schedule
+
+On macOS, Mila reads upcoming Calendar events and shows the next scheduled
+meeting in the menu bar, with the next few calls pinned at the top of the tray
+menu. Events with a meeting URL open that URL; other events focus Mila. macOS
+may ask for Calendar / Automation permission the first time this runs.
+
 ## Security notes
 
 - `contextIsolation: true`, `sandbox: true`, `nodeIntegration: false`.

@@ -36,6 +36,7 @@ export type DetectedProvider =
 export interface DetectedMeeting {
   provider: DetectedProvider;
   title: string;
+  detectedAppName?: string;
   meetingUrl?: string;
   detectedAt: string;
 }
@@ -43,6 +44,7 @@ export interface DetectedMeeting {
 interface DetectorOptions {
   intervalMs?: number;
   onDetect: (meeting: DetectedMeeting) => void;
+  onClear?: (meetingKey: string) => void;
   log?: (msg: string) => void;
 }
 
@@ -85,7 +87,7 @@ function runCommand(
  * including menu-bar / background-only ones.
  */
 function listProcesses(timeoutMs = 2500): Promise<string> {
-  return runCommand('ps', ['-axo', 'command'], timeoutMs);
+  return runCommand('/bin/ps', ['-axo', 'command'], timeoutMs);
 }
 
 /**
@@ -95,7 +97,7 @@ function listProcesses(timeoutMs = 2500): Promise<string> {
  * and FaceTime, which don't spawn distinct call-helper processes.
  */
 function getPmsetAssertions(timeoutMs = 2500): Promise<string> {
-  return runCommand('pmset', ['-g', 'assertions'], timeoutMs);
+  return runCommand('/usr/bin/pmset', ['-g', 'assertions'], timeoutMs);
 }
 
 /**
@@ -106,7 +108,7 @@ function getPmsetAssertions(timeoutMs = 2500): Promise<string> {
  */
 async function getProcessCommName(pid: number): Promise<string> {
   const out = await runCommand(
-    'ps',
+    '/bin/ps',
     ['-p', String(pid), '-o', 'comm='],
     1500,
   );
@@ -180,6 +182,31 @@ function detectWebex(procList: string): DetectedMeeting | null {
 }
 
 /**
+ * Browser-based calls do not expose a clean "Google Meet is active" process.
+ * Chrome does, however, spin up media utility helpers when a tab is actively
+ * using camera/video capture. That is the same class of desktop signal Granola
+ * surfaces as "Meeting detected — Chrome".
+ */
+function detectChromiumMediaUse(procList: string): DetectedMeeting | null {
+  const hasChrome = /\/Google Chrome\.app\/Contents\/MacOS\/Google Chrome/.test(
+    procList,
+  );
+  const hasVideoCapture =
+    /Google Chrome Helper.*--utility-sub-type=video_capture\.mojom\.VideoCaptureService/.test(
+      procList,
+    );
+
+  if (!hasChrome || !hasVideoCapture) return null;
+
+  return {
+    provider: 'google-meet',
+    title: 'Chrome call',
+    detectedAppName: 'Chrome',
+    detectedAt: new Date().toISOString(),
+  };
+}
+
+/**
  * Pure function that runs every provider matcher against a captured process
  * list. Exported for unit testing — the detector calls this internally with
  * the output of `ps -axo command`.
@@ -189,8 +216,35 @@ export function probeProcessList(procList: string): DetectedMeeting | null {
   // captured string. First match wins (Zoom first since it's most common
   // and most reliable).
   return (
-    detectZoom(procList) ?? detectTeams(procList) ?? detectWebex(procList)
+    detectZoom(procList) ??
+    detectTeams(procList) ??
+    detectWebex(procList) ??
+    detectChromiumMediaUse(procList)
   );
+}
+
+/**
+ * Some Catalyst/desktop apps expose app-owned power assertions while a call is
+ * active. WhatsApp, for example, publishes `net.whatsapp.idletimer` while a
+ * call screen is live. This catches the case where another recorder already
+ * owns the macOS mic assertion, so `coreaudiod` does not point directly at
+ * WhatsApp even though the user has joined a WhatsApp call.
+ */
+export function probePowerAssertions(
+  pmsetOutput: string,
+): DetectedMeeting | null {
+  const hasWhatsAppCall =
+    /\bpid \d+\(WhatsApp\):[\s\S]*?net\.whatsapp\.idletimer/.test(
+      pmsetOutput,
+    );
+  if (hasWhatsAppCall) {
+    return {
+      provider: 'whatsapp',
+      title: 'WhatsApp call',
+      detectedAt: new Date().toISOString(),
+    };
+  }
+  return null;
 }
 
 /**
@@ -213,6 +267,8 @@ export function probeProcessList(procList: string): DetectedMeeting | null {
  * even if we haven't catalogued the app yet.
  */
 const CALL_APP_PROVIDER_MAP: Record<string, DetectedProvider> = {
+  zoom: 'zoom',
+  'zoom.us': 'zoom',
   whatsapp: 'whatsapp',
   facetime: 'facetime',
   discord: 'discord',
@@ -318,6 +374,7 @@ export function classifyCallApp(commName: string): DetectedMeeting | null {
     return {
       provider,
       title: titleForProvider(provider, commName),
+      ...(provider === 'google-meet' ? { detectedAppName: 'Chrome' } : {}),
       detectedAt: new Date().toISOString(),
     };
   }
@@ -326,6 +383,8 @@ export function classifyCallApp(commName: string): DetectedMeeting | null {
 
 function titleForProvider(provider: DetectedProvider, commName: string): string {
   switch (provider) {
+    case 'zoom':
+      return 'Zoom meeting';
     case 'whatsapp':
       return 'WhatsApp call';
     case 'facetime':
@@ -384,6 +443,9 @@ export function startMeetingDetector(options: DetectorOptions): () => void {
       // it can't see Catalyst apps. Fall through to audio-assertion
       // detection only if the process list didn't yield a match.
       if (!detection && pmsetOutput) {
+        detection = probePowerAssertions(pmsetOutput);
+      }
+      if (!detection && pmsetOutput) {
         const pids = parseAudioAssertionPids(pmsetOutput);
         for (const pid of pids) {
           const commName = await getProcessCommName(pid);
@@ -410,6 +472,7 @@ export function startMeetingDetector(options: DetectorOptions): () => void {
       } else if (!key && lastKey) {
         // The meeting ended — reset so re-joining the same provider re-fires.
         options.log?.(`[meeting-detector] cleared ${lastKey}`);
+        options.onClear?.(lastKey);
         lastKey = null;
       }
     } catch (err) {

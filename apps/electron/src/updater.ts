@@ -1,11 +1,13 @@
 import { autoUpdater } from 'electron-updater';
 import { BrowserWindow, dialog, app } from 'electron';
+import fs from 'node:fs';
+import path from 'node:path';
 import { isDev } from './config';
 
 let initialized = false;
 
 export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
-  if (initialized || isDev) return;
+  if (initialized || !canUseAutoUpdater()) return;
   initialized = true;
 
   autoUpdater.autoDownload = true;
@@ -36,12 +38,12 @@ export function initAutoUpdater(getWindow: () => BrowserWindow | null) {
 }
 
 export async function checkForUpdatesInteractive(getWindow: () => BrowserWindow | null) {
-  if (isDev) {
+  if (!canUseAutoUpdater()) {
     const win = getWindow();
     if (win)
       void dialog.showMessageBox(win, {
         type: 'info',
-        message: 'Auto-updates are disabled in dev builds.',
+        message: 'Auto-updates are not configured for this build.',
       });
     return;
   }
@@ -70,4 +72,8 @@ async function checkForUpdatesQuiet() {
 
 export function installUpdateAndRestart() {
   autoUpdater.quitAndInstall();
+}
+
+function canUseAutoUpdater() {
+  return !isDev && fs.existsSync(path.join(process.resourcesPath, 'app-update.yml'));
 }

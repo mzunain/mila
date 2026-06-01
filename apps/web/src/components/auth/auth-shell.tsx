@@ -11,21 +11,21 @@ interface AuthShellProps {
 
 export function AuthShell({ title, subtitle, footer, children }: AuthShellProps) {
   return (
-    <main className="flex min-h-screen items-center justify-center px-6 py-12">
-      <div className="w-full max-w-md space-y-8 rounded-2xl border border-white/5 bg-[#141923]/70 p-8 shadow-2xl backdrop-blur">
+    <main className="mila-app-bg flex min-h-screen items-center justify-center px-6 py-12">
+      <div className="mila-surface-raised w-full max-w-md space-y-8 rounded-2xl border p-8 shadow-2xl backdrop-blur">
         <header className="flex flex-col items-center gap-3 text-center">
           <BrandLogo />
-          <h1 className="text-2xl font-semibold tracking-tight text-white">
+          <h1 className="text-2xl font-semibold tracking-tight text-[var(--foreground)]">
             {title}
           </h1>
-          <p className="text-sm text-slate-400">{subtitle}</p>
+          <p className="mila-muted text-sm">{subtitle}</p>
         </header>
         {children}
-        <p className="text-center text-sm text-slate-400">
+        <p className="mila-muted text-center text-sm">
           {footer.prompt}{" "}
           <Link
             href={footer.href}
-            className="font-medium text-emerald-300 hover:text-emerald-200"
+            className="font-medium text-[var(--accent)] hover:text-[var(--foreground)]"
           >
             {footer.label}
           </Link>

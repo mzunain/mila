@@ -23,11 +23,29 @@ interface UiMessage {
 }
 
 const STARTER_PROMPTS = [
-  "Summarise this week's customer calls",
-  "What did Ayla say about pricing?",
   "Draft a follow-up from my last meeting",
   "What action items do I owe people?",
+  "What decisions changed this week?",
+  "Find risks and blockers from recent calls",
 ];
+
+const MEMORY_MODES = [
+  {
+    title: "Follow-up",
+    prompt: "Draft a concise follow-up email from my most recent meeting",
+    icon: "mail-outline",
+  },
+  {
+    title: "Actions",
+    prompt: "List every open action item grouped by owner",
+    icon: "checkbox-outline",
+  },
+  {
+    title: "Decisions",
+    prompt: "Show the latest decisions and which meeting they came from",
+    icon: "git-branch-outline",
+  },
+] as const;
 
 export default function ChatScreen() {
   const { token } = useAuth();
@@ -113,6 +131,21 @@ export default function ChatScreen() {
         >
           {messages.length === 0 ? (
             <View style={styles.starters}>
+              <View style={styles.modeGrid}>
+                {MEMORY_MODES.map((mode) => (
+                  <Pressable
+                    key={mode.title}
+                    onPress={() => handleSend(mode.prompt)}
+                    style={({ pressed }) => [
+                      styles.modeCard,
+                      pressed && { backgroundColor: "#121822" },
+                    ]}
+                  >
+                    <Ionicons name={mode.icon} size={17} color="#67e8f9" />
+                    <Text style={styles.modeTitle}>{mode.title}</Text>
+                  </Pressable>
+                ))}
+              </View>
               <Text style={styles.startersTitle}>Try asking</Text>
               {STARTER_PROMPTS.map((prompt) => (
                 <Pressable
@@ -126,7 +159,7 @@ export default function ChatScreen() {
                   <Ionicons
                     name="sparkles-outline"
                     size={14}
-                    color="#6ee7b7"
+                    color="#67e8f9"
                   />
                   <Text style={styles.starterText}>{prompt}</Text>
                 </Pressable>
@@ -157,7 +190,7 @@ export default function ChatScreen() {
           )}
           {sending ? (
             <View style={[styles.bubble, styles.bubbleAssistant]}>
-              <ActivityIndicator color="#6ee7b7" size="small" />
+              <ActivityIndicator color="#67e8f9" size="small" />
             </View>
           ) : null}
           {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -182,7 +215,7 @@ export default function ChatScreen() {
               (!input.trim() || pressed || sending) && { opacity: 0.6 },
             ]}
           >
-            <Ionicons name="arrow-up" size={18} color="#020617" />
+            <Ionicons name="arrow-up" size={18} color="#061113" />
           </Pressable>
         </View>
       </KeyboardAvoidingView>
@@ -191,7 +224,7 @@ export default function ChatScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0a0d12" },
+  safe: { flex: 1, backgroundColor: "#0f1012" },
   flex: { flex: 1 },
   header: { padding: 20, gap: 4 },
   eyebrow: {
@@ -201,9 +234,24 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
   title: { color: "#fff", fontSize: 28, fontWeight: "700" },
-  subtitle: { color: "#94a3b8", fontSize: 13, marginTop: 4 },
+  subtitle: { color: "#a6a29b", fontSize: 13, marginTop: 4 },
   scrollContent: { padding: 20, gap: 12 },
   starters: { gap: 8 },
+  modeGrid: {
+    flexDirection: "row",
+    gap: 8,
+    marginBottom: 8,
+  },
+  modeCard: {
+    flex: 1,
+    backgroundColor: "#18191e",
+    borderColor: "rgba(103, 232, 249, 0.22)",
+    borderWidth: 1,
+    borderRadius: 12,
+    padding: 12,
+    gap: 8,
+  },
+  modeTitle: { color: "#f4f1ec", fontSize: 12, fontWeight: "700" },
   startersTitle: {
     color: "#64748b",
     fontSize: 11,
@@ -217,22 +265,22 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderRadius: 10,
   },
-  starterText: { color: "#cbd5e1", fontSize: 14, flex: 1 },
+  starterText: { color: "#f4f1ec", fontSize: 14, flex: 1 },
   bubble: { maxWidth: "85%", paddingHorizontal: 14, paddingVertical: 10, borderRadius: 16 },
   bubbleUser: {
     alignSelf: "flex-end",
-    backgroundColor: "rgba(110, 231, 183, 0.15)",
+    backgroundColor: "rgba(103, 232, 249, 0.15)",
     borderBottomRightRadius: 4,
   },
   bubbleAssistant: {
     alignSelf: "flex-start",
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderBottomLeftRadius: 4,
   },
@@ -245,8 +293,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderTopWidth: 1,
-    borderTopColor: "#1e293b",
-    backgroundColor: "#0a0d12",
+    borderTopColor: "#2b2d33",
+    backgroundColor: "#0f1012",
     alignItems: "flex-end",
   },
   input: {
@@ -255,17 +303,18 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 10,
     maxHeight: 100,
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderRadius: 18,
     fontSize: 15,
+    textAlignVertical: "center",
   },
   sendButton: {
     height: 38,
     width: 38,
     borderRadius: 19,
-    backgroundColor: "#6ee7b7",
+    backgroundColor: "#67e8f9",
     alignItems: "center",
     justifyContent: "center",
   },

@@ -1,9 +1,12 @@
 import type {
   ActionItem,
+  LiveCoachCard,
+  LiveMeetingCoach,
   MeetingNotes,
   MeetingSession,
   TranscriptSegment,
 } from "@mila/shared";
+import { buildLiveMeetingCoach, buildMeetingActionReview } from "@mila/shared";
 import { Ionicons } from "@expo/vector-icons";
 import { router, useLocalSearchParams } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
@@ -63,12 +66,22 @@ export default function SessionDetailScreen() {
     await load();
     setRefreshing(false);
   };
+  const actionReview = detail
+    ? buildMeetingActionReview(detail.notes)
+    : null;
+  const liveCoach = detail
+    ? buildLiveMeetingCoach({
+        notes: detail.notes,
+        segments: detail.segments,
+        isLive: detail.session.status === "live",
+      })
+    : null;
 
   return (
     <SafeAreaView style={styles.safe} edges={["top"]}>
       <View style={styles.header}>
         <Pressable onPress={() => router.back()} style={styles.iconButton}>
-          <Ionicons name="chevron-back" size={22} color="#cbd5e1" />
+          <Ionicons name="chevron-back" size={22} color="#f4f1ec" />
         </Pressable>
         <Text style={styles.headerTitle} numberOfLines={1}>
           {detail?.session.title || "Session"}
@@ -78,7 +91,7 @@ export default function SessionDetailScreen() {
 
       {detail === null && !error ? (
         <View style={styles.loading}>
-          <ActivityIndicator color="#6ee7b7" />
+          <ActivityIndicator color="#67e8f9" />
         </View>
       ) : error ? (
         <View style={styles.error}>
@@ -95,7 +108,7 @@ export default function SessionDetailScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#6ee7b7"
+              tintColor="#67e8f9"
             />
           }
         >
@@ -112,6 +125,10 @@ export default function SessionDetailScreen() {
             {"  ·  "}
             {detail.session.status}
           </Text>
+
+          {liveCoach ? <LiveCoach coach={liveCoach} /> : null}
+
+          {actionReview ? <ActionCenter review={actionReview} /> : null}
 
           <Section title="Summary">
             <Text style={styles.body}>{detail.notes.summary}</Text>
@@ -173,6 +190,165 @@ export default function SessionDetailScreen() {
   );
 }
 
+function LiveCoach({ coach }: { coach: LiveMeetingCoach }) {
+  return (
+    <View style={styles.liveCoach}>
+      <View style={styles.liveCoachHeader}>
+        <View style={{ flex: 1 }}>
+          <View style={styles.liveCoachTitleRow}>
+            <Ionicons name="sparkles-outline" size={16} color="#67e8f9" />
+            <Text style={styles.liveCoachTitle}>Live coach</Text>
+          </View>
+          <Text style={styles.liveCoachSubtitle}>{coach.headline}</Text>
+        </View>
+        <View
+          style={[
+            styles.liveCoachBadge,
+            coach.state === "coaching" && styles.liveCoachBadgeGood,
+            coach.state === "warming-up" && styles.liveCoachBadgeWarn,
+          ]}
+        >
+          <Text style={styles.liveCoachBadgeText}>
+            {formatLiveCoachState(coach.state)}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.liveCoachMetrics}>
+        {coach.metrics.map((metric) => (
+          <View key={metric.id} style={styles.liveCoachMetric}>
+            <Text
+              style={[
+                styles.liveCoachMetricValue,
+                metric.tone === "good" && styles.metricGood,
+                metric.tone === "warning" && styles.metricWarn,
+              ]}
+            >
+              {metric.value}
+            </Text>
+            <Text style={styles.liveCoachMetricLabel}>{metric.label}</Text>
+          </View>
+        ))}
+      </View>
+
+      <Text style={styles.liveCoachPrompt}>{coach.nextBestPrompt}</Text>
+
+      {coach.cards.length > 0 ? (
+        <View style={styles.liveCoachCards}>
+          {coach.cards.slice(0, 3).map((card) => (
+            <LiveCoachCardRow key={card.id} card={card} />
+          ))}
+        </View>
+      ) : (
+        <Text style={styles.liveCoachEmpty}>
+          Coach prompts appear when Mila sees decisions, questions, owners, or
+          deadlines worth tightening.
+        </Text>
+      )}
+    </View>
+  );
+}
+
+function LiveCoachCardRow({ card }: { card: LiveCoachCard }) {
+  return (
+    <View style={styles.liveCoachCardRow}>
+      <View
+        style={[
+          styles.liveCoachCardIcon,
+          card.tone === "warning" && styles.liveCoachCardIconWarn,
+          card.tone === "good" && styles.liveCoachCardIconGood,
+        ]}
+      >
+        <Ionicons
+          name={liveCoachIconName(card.kind)}
+          size={15}
+          color={card.tone === "warning" ? "#ff9b7c" : "#67e8f9"}
+        />
+      </View>
+      <View style={{ flex: 1 }}>
+        <Text style={styles.liveCoachCardTitle}>{card.title}</Text>
+        <Text style={styles.liveCoachCardDetail} numberOfLines={2}>
+          {card.detail}
+        </Text>
+        <Text style={styles.liveCoachCardAction}>{card.actionLabel}</Text>
+      </View>
+    </View>
+  );
+}
+
+function ActionCenter({
+  review,
+}: {
+  review: ReturnType<typeof buildMeetingActionReview>;
+}) {
+  return (
+    <View style={styles.actionCenter}>
+      <View style={styles.actionHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.actionTitle}>Action center</Text>
+          <Text style={styles.actionSubtitle}>{review.headline}</Text>
+        </View>
+        <View
+          style={[
+            styles.actionBadge,
+            review.riskLevel === "clear" && styles.actionBadgeGood,
+            review.riskLevel !== "clear" &&
+              review.riskLevel !== "empty" &&
+              styles.actionBadgeWarn,
+          ]}
+        >
+          <Text style={styles.actionBadgeText}>
+            {formatActionRisk(review.riskLevel)}
+          </Text>
+        </View>
+      </View>
+
+      <View style={styles.metricGrid}>
+        {review.metrics.map((metric) => (
+          <View key={metric.id} style={styles.metricCard}>
+            <Text
+              style={[
+                styles.metricValue,
+                metric.tone === "good" && styles.metricGood,
+                metric.tone === "warning" && styles.metricWarn,
+              ]}
+            >
+              {metric.value}
+            </Text>
+            <Text style={styles.metricLabel}>{metric.label}</Text>
+          </View>
+        ))}
+      </View>
+
+      <Text style={styles.nextBest}>{review.nextBestAction}</Text>
+
+      {review.topActions.length > 0 ? (
+        <View style={styles.topActions}>
+          {review.topActions.slice(0, 3).map((item) => (
+            <View key={item.id} style={styles.topActionRow}>
+              <Ionicons
+                name={item.status === "done" ? "checkmark-circle" : "ellipse"}
+                size={14}
+                color={
+                  item.overdue || item.missingOwner || item.missingDue
+                    ? "#ff9b7c"
+                    : "#67e8f9"
+                }
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.itemText}>{item.text}</Text>
+                <Text style={styles.itemMeta}>
+                  {item.ownerLabel} · {item.dueLabel}
+                </Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
+    </View>
+  );
+}
+
 function Section({
   title,
   children,
@@ -195,7 +371,7 @@ function ActionItemRow({ item }: { item: ActionItem }) {
       <Ionicons
         name={done ? "checkbox-outline" : "square-outline"}
         size={16}
-        color={done ? "#6ee7b7" : "#94a3b8"}
+        color={done ? "#67e8f9" : "#a6a29b"}
       />
       <View style={{ flex: 1 }}>
         <Text style={[styles.itemText, done && styles.itemDone]}>
@@ -218,15 +394,67 @@ function formatTimestamp(ms: number) {
   return `${minutes}:${seconds.toString().padStart(2, "0")}`;
 }
 
+function formatActionRisk(
+  risk: ReturnType<typeof buildMeetingActionReview>["riskLevel"],
+) {
+  switch (risk) {
+    case "clear":
+      return "Ready";
+    case "empty":
+      return "Watching";
+    case "needs-owners":
+      return "Owners";
+    case "needs-dates":
+      return "Dates";
+    case "overloaded":
+      return "Triage";
+  }
+}
+
+function formatLiveCoachState(state: LiveMeetingCoach["state"]) {
+  switch (state) {
+    case "coaching":
+      return "Live";
+    case "review":
+      return "Review";
+    case "warming-up":
+      return "Warming";
+    case "empty":
+    default:
+      return "Waiting";
+  }
+}
+
+function liveCoachIconName(
+  kind: LiveCoachCard["kind"],
+): keyof typeof Ionicons.glyphMap {
+  switch (kind) {
+    case "owner-check":
+    case "participation":
+      return "people-outline";
+    case "date-check":
+      return "calendar-outline";
+    case "decision-check":
+      return "checkmark-circle-outline";
+    case "open-question":
+      return "chatbubble-ellipses-outline";
+    case "language-shift":
+      return "language-outline";
+    case "catch-up":
+    default:
+      return "sparkles-outline";
+  }
+}
+
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0a0d12" },
+  safe: { flex: 1, backgroundColor: "#0f1012" },
   header: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
     paddingHorizontal: 8,
     paddingVertical: 10,
-    borderBottomColor: "#1e293b",
+    borderBottomColor: "#2b2d33",
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   iconButton: { height: 40, width: 40, alignItems: "center", justifyContent: "center" },
@@ -236,7 +464,7 @@ const styles = StyleSheet.create({
   errorText: { color: "#fca5a5", fontSize: 14, textAlign: "center" },
   retryButton: {
     marginTop: 8,
-    backgroundColor: "#1e293b",
+    backgroundColor: "#2b2d33",
     paddingHorizontal: 18,
     paddingVertical: 10,
     borderRadius: 8,
@@ -244,7 +472,163 @@ const styles = StyleSheet.create({
   retryText: { color: "#e2e8f0", fontWeight: "600" },
   container: { padding: 20, gap: 20 },
   title: { color: "#fff", fontSize: 24, fontWeight: "700" },
-  meta: { color: "#94a3b8", fontSize: 12 },
+  meta: { color: "#a6a29b", fontSize: 12 },
+  liveCoach: {
+    backgroundColor: "#18191e",
+    borderColor: "rgba(103, 232, 249, 0.22)",
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    gap: 12,
+  },
+  liveCoachHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  liveCoachTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 7,
+  },
+  liveCoachTitle: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  liveCoachSubtitle: {
+    color: "#a6a29b",
+    fontSize: 12,
+    marginTop: 4,
+    lineHeight: 17,
+  },
+  liveCoachBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: "#24262d",
+  },
+  liveCoachBadgeGood: { backgroundColor: "rgba(103, 232, 249, 0.16)" },
+  liveCoachBadgeWarn: { backgroundColor: "rgba(255, 155, 124, 0.14)" },
+  liveCoachBadgeText: { color: "#f4f1ec", fontSize: 10, fontWeight: "700" },
+  liveCoachMetrics: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  liveCoachMetric: {
+    width: "47%",
+    backgroundColor: "#101216",
+    borderColor: "#2b2d33",
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+  },
+  liveCoachMetricValue: { color: "#fff", fontSize: 17, fontWeight: "700" },
+  liveCoachMetricLabel: { color: "#a6a29b", fontSize: 10, marginTop: 2 },
+  liveCoachPrompt: {
+    color: "#e2e8f0",
+    fontSize: 12,
+    lineHeight: 17,
+    backgroundColor: "rgba(103, 232, 249, 0.1)",
+    borderRadius: 10,
+    padding: 10,
+  },
+  liveCoachCards: { gap: 8 },
+  liveCoachCardRow: {
+    flexDirection: "row",
+    gap: 10,
+    alignItems: "flex-start",
+    backgroundColor: "#101216",
+    borderColor: "#2b2d33",
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+  },
+  liveCoachCardIcon: {
+    height: 30,
+    width: 30,
+    borderRadius: 9,
+    backgroundColor: "rgba(103, 232, 249, 0.1)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  liveCoachCardIconGood: { backgroundColor: "rgba(103, 232, 249, 0.14)" },
+  liveCoachCardIconWarn: { backgroundColor: "rgba(255, 155, 124, 0.14)" },
+  liveCoachCardTitle: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  liveCoachCardDetail: {
+    color: "#a6a29b",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  liveCoachCardAction: {
+    alignSelf: "flex-start",
+    color: "#67e8f9",
+    fontSize: 10,
+    fontWeight: "800",
+    marginTop: 6,
+    textTransform: "uppercase",
+  },
+  liveCoachEmpty: {
+    color: "#a6a29b",
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: "center",
+    borderWidth: 1,
+    borderColor: "#2b2d33",
+    borderStyle: "dashed",
+    borderRadius: 10,
+    padding: 12,
+  },
+  actionCenter: {
+    backgroundColor: "#18191e",
+    borderColor: "rgba(103, 232, 249, 0.22)",
+    borderWidth: 1,
+    borderRadius: 14,
+    padding: 14,
+    gap: 12,
+  },
+  actionHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+  },
+  actionTitle: { color: "#fff", fontSize: 15, fontWeight: "700" },
+  actionSubtitle: { color: "#a6a29b", fontSize: 12, marginTop: 3, lineHeight: 17 },
+  actionBadge: {
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    backgroundColor: "#24262d",
+  },
+  actionBadgeGood: { backgroundColor: "rgba(103, 232, 249, 0.16)" },
+  actionBadgeWarn: { backgroundColor: "rgba(255, 155, 124, 0.14)" },
+  actionBadgeText: { color: "#f4f1ec", fontSize: 10, fontWeight: "700" },
+  metricGrid: { flexDirection: "row", flexWrap: "wrap", gap: 8 },
+  metricCard: {
+    width: "47%",
+    backgroundColor: "#101216",
+    borderColor: "#2b2d33",
+    borderWidth: 1,
+    borderRadius: 10,
+    padding: 10,
+  },
+  metricValue: { color: "#fff", fontSize: 18, fontWeight: "700" },
+  metricGood: { color: "#67e8f9" },
+  metricWarn: { color: "#ff9b7c" },
+  metricLabel: { color: "#a6a29b", fontSize: 11, marginTop: 2 },
+  nextBest: {
+    color: "#e2e8f0",
+    fontSize: 12,
+    lineHeight: 17,
+    backgroundColor: "rgba(103, 232, 249, 0.1)",
+    borderRadius: 10,
+    padding: 10,
+  },
+  topActions: { gap: 8 },
+  topActionRow: {
+    flexDirection: "row",
+    gap: 9,
+    alignItems: "flex-start",
+    backgroundColor: "#101216",
+    borderRadius: 10,
+    padding: 10,
+  },
   section: { gap: 10 },
   sectionTitle: {
     color: "#64748b",
@@ -252,24 +636,24 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     letterSpacing: 1.2,
   },
-  body: { color: "#cbd5e1", fontSize: 14, lineHeight: 20 },
+  body: { color: "#f4f1ec", fontSize: 14, lineHeight: 20 },
   bulletRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
   bulletDot: {
     width: 6,
     height: 6,
     borderRadius: 3,
-    backgroundColor: "#6ee7b7",
+    backgroundColor: "#67e8f9",
     marginTop: 7,
   },
   itemRow: { flexDirection: "row", gap: 10, alignItems: "flex-start" },
   itemText: { color: "#e2e8f0", fontSize: 14, flex: 1, lineHeight: 20 },
-  itemDone: { color: "#94a3b8", textDecorationLine: "line-through" },
+  itemDone: { color: "#a6a29b", textDecorationLine: "line-through" },
   itemMeta: { color: "#64748b", fontSize: 11, marginTop: 2 },
   segment: {
     paddingVertical: 10,
     paddingHorizontal: 12,
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderRadius: 10,
     gap: 4,

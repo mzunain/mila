@@ -287,7 +287,7 @@ export default function RecordScreen() {
           style={styles.closeButton}
           accessibilityLabel="Close"
         >
-          <Ionicons name="chevron-down" size={24} color="#cbd5e1" />
+          <Ionicons name="chevron-down" size={24} color="#f4f1ec" />
         </Pressable>
         <Text style={styles.headerTitle}>
           {phase === "preparing"
@@ -314,12 +314,12 @@ export default function RecordScreen() {
             ]}
           >
             {phase === "preparing" || phase === "uploading" ? (
-              <ActivityIndicator color="#020617" />
+              <ActivityIndicator color="#061113" />
             ) : (
               <Ionicons
                 name={phase === "error" ? "alert" : "mic"}
                 size={42}
-                color="#020617"
+                color="#061113"
               />
             )}
           </View>
@@ -437,7 +437,7 @@ function formatElapsed(seconds: number) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0a0d12" },
+  safe: { flex: 1, backgroundColor: "#0f1012" },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -457,7 +457,7 @@ const styles = StyleSheet.create({
     height: 200,
     width: 200,
     borderRadius: 100,
-    backgroundColor: "rgba(110, 231, 183, 0.15)",
+    backgroundColor: "rgba(103, 232, 249, 0.15)",
     alignItems: "center",
     justifyContent: "center",
   },
@@ -465,18 +465,18 @@ const styles = StyleSheet.create({
     height: 130,
     width: 130,
     borderRadius: 65,
-    backgroundColor: "#6ee7b7",
+    backgroundColor: "#67e8f9",
     alignItems: "center",
     justifyContent: "center",
   },
   timer: { color: "#fff", fontSize: 44, fontWeight: "300", letterSpacing: 2 },
-  hint: { color: "#94a3b8", fontSize: 13, textAlign: "center", maxWidth: 280 },
+  hint: { color: "#a6a29b", fontSize: 13, textAlign: "center", maxWidth: 280 },
   transcriptScroll: { width: "100%", marginTop: 8, flex: 1 },
   transcriptContent: { gap: 8, paddingBottom: 12 },
   transcript: {
     width: "100%",
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderRadius: 12,
     padding: 16,
@@ -488,10 +488,10 @@ const styles = StyleSheet.create({
     height: 8,
     width: 8,
     borderRadius: 4,
-    backgroundColor: "#6ee7b7",
+    backgroundColor: "#67e8f9",
     marginTop: 5,
   },
-  transcriptText: { color: "#cbd5e1", fontSize: 13, flex: 1, lineHeight: 19 },
+  transcriptText: { color: "#f4f1ec", fontSize: 13, flex: 1, lineHeight: 19 },
   footer: { padding: 24 },
   stopButton: {
     flexDirection: "row",

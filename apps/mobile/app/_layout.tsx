@@ -15,18 +15,18 @@ export default function RootLayout() {
   }, []);
 
   if (!apiReady) {
-    return <View style={{ flex: 1, backgroundColor: "#0a0d12" }} />;
+    return <View style={{ flex: 1, backgroundColor: "#0f1012" }} />;
   }
 
   return (
-    <GestureHandlerRootView style={{ flex: 1, backgroundColor: "#0a0d12" }}>
+    <GestureHandlerRootView style={{ flex: 1, backgroundColor: "#0f1012" }}>
       <SafeAreaProvider>
         <AuthProvider>
           <StatusBar style="light" />
           <Stack
             screenOptions={{
               headerShown: false,
-              contentStyle: { backgroundColor: "#0a0d12" },
+              contentStyle: { backgroundColor: "#0f1012" },
             }}
           >
             <Stack.Screen name="(tabs)" />

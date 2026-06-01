@@ -113,7 +113,17 @@ def get_model():
     model_name = os.getenv("WHISPER_MODEL", "small")
     device = os.getenv("WHISPER_DEVICE", "auto")
     compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "auto")
-    return WhisperModel(model_name, device=device, compute_type=compute_type)
+    # Pin the CPU thread count. Inside a container CTranslate2 otherwise reads
+    # the *host* core count (not the cgroup/VM limit), so on a small VM it spawns
+    # far more threads than there are vCPUs and thrashes — measurably slower than
+    # matching the thread count to the VM's vCPUs. 0 keeps the library default.
+    cpu_threads = int(os.getenv("WHISPER_CPU_THREADS", "0"))
+    return WhisperModel(
+        model_name,
+        device=device,
+        compute_type=compute_type,
+        cpu_threads=cpu_threads,
+    )
 
 
 def decode_audio(audio_base64: str) -> bytes:

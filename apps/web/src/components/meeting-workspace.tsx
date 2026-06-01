@@ -612,6 +612,27 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     [apiHttpUrl, token],
   );
 
+  const fetchCapabilities =
+    useCallback(async (): Promise<AppCapabilities | null> => {
+      try {
+        const response = await fetch(`${apiHttpUrl}/api/capabilities`, {
+          cache: "no-store",
+          headers: buildAuthHeaders(),
+        });
+
+        if (!response.ok) {
+          return null;
+        }
+
+        const next = (await response.json()) as AppCapabilities;
+        setCapabilities(next);
+        return next;
+      } catch {
+        // Keep conservative defaults when the API is unavailable.
+        return null;
+      }
+    }, [apiHttpUrl, buildAuthHeaders]);
+
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
@@ -999,11 +1020,22 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
           sendMockChunk(created.session, socket);
         } else if (!signal.captureAudio) {
           setStatus("recording");
-        } else if (!capabilities.supportsRealAudio) {
-          throw new Error(
-            "Auto-start detected a meeting, but real audio transcription is not configured yet.",
-          );
         } else {
+          // Capabilities load asynchronously, but an auto-start signal can fire
+          // before that fetch resolves — leaving this closure with the conservative
+          // mock default. Confirm against a fresh fetch before declaring real audio
+          // unavailable, so a slow capabilities load can't raise a false
+          // "not configured" error (which never retries, the signal is latched).
+          const realAudioReady =
+            capabilities.supportsRealAudio ||
+            (await fetchCapabilities())?.supportsRealAudio === true;
+
+          if (!realAudioReady) {
+            throw new Error(
+              "Auto-start detected a meeting, but real audio transcription is not configured yet.",
+            );
+          }
+
           await attachMicrophone(created.session, socket);
         }
 
@@ -1022,6 +1054,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     [
       attachMicrophone,
       capabilities.supportsRealAudio,
+      fetchCapabilities,
       openLiveSession,
       sendMockChunk,
     ],
@@ -1089,33 +1122,10 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   }, [autoStartEnabled, autoStartSignal, startAutoDetectedSession, status]);
 
   useEffect(() => {
-    let cancelled = false;
-
     void (async () => {
-      try {
-        const response = await fetch(`${apiHttpUrl}/api/capabilities`, {
-          cache: "no-store",
-          headers: buildAuthHeaders(),
-        });
-
-        if (!response.ok) {
-          return;
-        }
-
-        const nextCapabilities = (await response.json()) as AppCapabilities;
-
-        if (!cancelled) {
-          setCapabilities(nextCapabilities);
-        }
-      } catch {
-        // Keep conservative defaults when the API is unavailable.
-      }
+      await fetchCapabilities();
     })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [apiHttpUrl, buildAuthHeaders]);
+  }, [fetchCapabilities]);
 
   useEffect(() => {
     let cancelled = false;

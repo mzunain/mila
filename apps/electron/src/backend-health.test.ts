@@ -4,15 +4,15 @@ import { healthUrlFromApiUrl, pollHealth } from './backend-health';
 
 test('healthUrlFromApiUrl derives /api/health from an origin', () => {
   assert.equal(
-    healthUrlFromApiUrl('http://localhost:4000'),
-    'http://localhost:4000/api/health',
+    healthUrlFromApiUrl('http://localhost:7400'),
+    'http://localhost:7400/api/health',
   );
 });
 
 test('healthUrlFromApiUrl ignores any path, query, or trailing slash', () => {
   assert.equal(
-    healthUrlFromApiUrl('http://localhost:4000/'),
-    'http://localhost:4000/api/health',
+    healthUrlFromApiUrl('http://localhost:7400/'),
+    'http://localhost:7400/api/health',
   );
   assert.equal(
     healthUrlFromApiUrl('https://api.mila.app/some/path?x=1'),
@@ -22,8 +22,8 @@ test('healthUrlFromApiUrl ignores any path, query, or trailing slash', () => {
 
 test('healthUrlFromApiUrl tolerates a bare host:port by assuming http', () => {
   assert.equal(
-    healthUrlFromApiUrl('localhost:4000'),
-    'http://localhost:4000/api/health',
+    healthUrlFromApiUrl('localhost:7400'),
+    'http://localhost:7400/api/health',
   );
 });
 

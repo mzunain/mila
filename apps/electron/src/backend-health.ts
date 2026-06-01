@@ -8,7 +8,7 @@
  */
 export function healthUrlFromApiUrl(apiUrl: string): string {
   const trimmed = (apiUrl ?? '').trim();
-  // Without a scheme, `new URL('localhost:4000')` treats "localhost" as the
+  // Without a scheme, `new URL('localhost:7400')` treats "localhost" as the
   // protocol and yields an opaque (null) origin. Prepend http:// so a bare
   // host:port resolves to a usable origin — fetch needs a scheme regardless.
   const withScheme = /^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)

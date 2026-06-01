@@ -38,7 +38,7 @@ The default API URL lives in `app.json` under `expo.extra.apiBaseUrl`. For local
 
 ```bash
 # point the app at your local API
-export EXPO_PUBLIC_API_URL=http://192.168.1.10:4000
+export EXPO_PUBLIC_API_URL=http://192.168.1.10:7400
 ```
 
 Then update `src/lib/api.ts` to read from `process.env.EXPO_PUBLIC_API_URL` if set.

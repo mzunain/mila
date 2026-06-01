@@ -13,7 +13,7 @@ let initialized = false;
 function getDefaultBaseUrl(): string {
   const fromExtra = (Constants.expoConfig?.extra as { apiBaseUrl?: string } | undefined)
     ?.apiBaseUrl;
-  return fromExtra ?? "http://localhost:4000";
+  return fromExtra ?? "http://localhost:7400";
 }
 
 function normalize(url: string): string {

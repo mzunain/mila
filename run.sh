@@ -35,8 +35,8 @@ Usage:
   ./run.sh status       Show Docker service status
 
 The default command opens the source development stack:
-  - Web UI: http://localhost:3000
-  - API:    http://localhost:4000/api/health
+  - Web UI: http://localhost:7300
+  - API:    http://localhost:7400/api/health
 EOF
 }
 
@@ -118,10 +118,10 @@ load_env() {
   set +a
 
   export DATABASE_URL="${DATABASE_URL:-postgresql://mila:mila@localhost:15432/mila}"
-  export MILA_API_INTERNAL_URL="${MILA_API_INTERNAL_URL:-http://localhost:4000}"
+  export MILA_API_INTERNAL_URL="${MILA_API_INTERNAL_URL:-http://localhost:7400}"
   export NEXT_PUBLIC_API_BASE_URL="${NEXT_PUBLIC_API_BASE_URL:-}"
-  export NEXT_PUBLIC_API_WS_URL="${NEXT_PUBLIC_API_WS_URL:-ws://localhost:4000/meetings/live}"
-  export WEB_ORIGIN="${WEB_ORIGIN:-http://localhost:3000}"
+  export NEXT_PUBLIC_API_WS_URL="${NEXT_PUBLIC_API_WS_URL:-ws://localhost:7400/meetings/live}"
+  export WEB_ORIGIN="${WEB_ORIGIN:-http://localhost:7300}"
   export ASR_PROVIDER="${ASR_PROVIDER:-http}"
   export ASR_BASE_URL="${ASR_BASE_URL:-http://127.0.0.1:9000}"
 
@@ -218,8 +218,8 @@ start_dev() {
   prepare_database
 
   log "Starting API and web UI..."
-  log "Web UI: http://localhost:3000"
-  log "API:    http://localhost:4000/api/health"
+  log "Web UI: http://localhost:7300"
+  log "API:    http://localhost:7400/api/health"
   log "Use Ctrl-C to stop API/web. Docker services stay up; stop them with ./run.sh stop."
   exec pnpm dev
 }
@@ -233,7 +233,7 @@ start_backend() {
 
   log "Starting Docker backend stack..."
   compose up -d --build
-  log "Backend API: http://localhost:4000/api/health"
+  log "Backend API: http://localhost:7400/api/health"
   log "Stop it with ./run.sh stop."
 }
 

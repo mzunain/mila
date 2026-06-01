@@ -14,7 +14,7 @@ a system tray, and preferences storage.
 │  ├─ auto-updater (electron-updater)                            │
 │  └─ in prod: spawns bundled Next.js standalone server          │
 │       on a random port → BrowserWindow.loadURL(...)            │
-│     in dev:  loads http://localhost:3000/app directly          │
+│     in dev:  loads http://localhost:7300/app directly          │
 └────────────────────────────────────────────────────────────────┘
          │                            ▲
          │ contextBridge              │
@@ -33,7 +33,7 @@ a system tray, and preferences storage.
 
 The API (`@mila/api`) is **not** bundled inside the desktop app. The shell
 points at whatever `apiUrl` / `wsUrl` the user configures in preferences
-(defaults to `http://localhost:4000` so local dev still works end-to-end).
+(defaults to `http://localhost:7400` so local dev still works end-to-end).
 
 ## Develop
 
@@ -43,7 +43,7 @@ pnpm dev:desktop
 ```
 
 Under the hood that runs `apps/web` (`next dev`) and waits for it to come up
-before launching Electron. The shell loads `http://localhost:3000/app`
+before launching Electron. The shell loads `http://localhost:7300/app`
 directly — the marketing landing at `/` is web-only and never opens inside
 the desktop window. Override with `MILA_DEV_URL=…` if you need a different
 host. DevTools open automatically (detached).
@@ -151,8 +151,8 @@ locations on Windows/Linux).
 
 | Key             | Default                                      |
 | --------------- | -------------------------------------------- |
-| `apiUrl`        | `http://localhost:4000`                      |
-| `wsUrl`         | `ws://localhost:4000/meetings/live`          |
+| `apiUrl`        | `http://localhost:7400`                      |
+| `wsUrl`         | `ws://localhost:7400/meetings/live`          |
 | `theme`         | `system`                                     |
 | `launchAtLogin` | `false`                                      |
 | `startMinimized`| `false`                                      |

@@ -1,7 +1,7 @@
 import "server-only";
 
 export function getApiBaseUrl() {
-  return process.env.MILA_API_INTERNAL_URL ?? "http://localhost:4000";
+  return process.env.MILA_API_INTERNAL_URL ?? "http://localhost:7400";
 }
 
 export async function apiFetch(

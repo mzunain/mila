@@ -3,3 +3,6 @@ export * from './meetings.js';
 export * from './notes.js';
 export * from './templates.js';
 export * from './chat.js';
+export * from './briefs.js';
+export * from './intelligence.js';
+export * from './live-coach.js';

@@ -1,5 +1,6 @@
 import { SupportedLanguageCode, TextDirection } from "./language.js";
 import { MeetingNotes } from "./notes.js";
+import type { ActionReviewRisk } from "./intelligence.js";
 
 export type MeetingStatus =
   | "scheduled"
@@ -43,6 +44,27 @@ export interface MeetingSession {
   createdAt: string;
   startedAt?: string;
   endedAt?: string;
+}
+
+export interface MeetingSessionPreview {
+  summary: string;
+  keyPoints: string[];
+  decisionCount: number;
+  actionStats: {
+    total: number;
+    open: number;
+    completed: number;
+    missingOwner: number;
+    missingDue: number;
+    overdue: number;
+    riskLevel: ActionReviewRisk;
+    headline: string;
+  };
+  updatedAt?: string;
+}
+
+export interface MeetingSessionListItem extends MeetingSession {
+  notesPreview?: MeetingSessionPreview;
 }
 
 export interface TranscriptSegment {
@@ -117,6 +139,12 @@ export type ServerMeetingEvent =
   | {
       type: "notes";
       notes: MeetingNotes;
+    }
+  | {
+      type: "status";
+      code: string;
+      message: string;
+      severity: "info" | "warning";
     }
   | {
       type: "error";

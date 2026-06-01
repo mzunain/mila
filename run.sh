@@ -139,10 +139,14 @@ warn_if_missing_llm_key() {
 ensure_node() {
   command_exists node || die "Node.js 20.19+ is required. Install Node.js, then run this again."
 
-  local major
-  major="$(node -p "process.versions.node.split('.')[0]" 2>/dev/null || echo 0)"
-  if (( major < 20 )); then
-    die "Node.js 20.19+ is required. Current version: $(node -v)."
+  local version major minor
+  version="$(node -p "process.versions.node" 2>/dev/null || echo "0.0.0")"
+  IFS=. read -r major minor _ <<<"$version"
+  major="${major:-0}"
+  minor="${minor:-0}"
+
+  if (( major < 20 || (major == 20 && minor < 19) )); then
+    die "Node.js 20.19+ is required. Current version: v$version. Update Node.js, then run this again."
   fi
 }
 

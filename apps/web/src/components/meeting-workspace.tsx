@@ -2,6 +2,8 @@
 
 import {
   ActionItem,
+  AssistSuggestion,
+  AssistTurn,
   CreateMeetingRequest,
   CreateMeetingResponse,
   ExternalMeetingContext,
@@ -57,6 +59,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { BrandLogo } from "./brand-logo";
 import { AccountCard } from "./auth/account-card";
 import { CommandPalette } from "./command-palette";
+import { LiveAssistPanel } from "./live-assist-panel";
 import { MeetingBriefCard } from "./meeting-brief-card";
 import { ShareSessionButton } from "./share-session-button";
 import { TemplatePicker } from "./template-picker";
@@ -191,6 +194,13 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const [search, setSearch] = useState("");
   const [commandOpen, setCommandOpen] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [assistEnabled, setAssistEnabled] = useState(false);
+  const [assistSuggestion, setAssistSuggestion] =
+    useState<AssistSuggestion | null>(null);
+  const [assistUnavailable, setAssistUnavailable] = useState<
+    "no-model" | "no-suggestion" | null
+  >(null);
+  const [assistPending, setAssistPending] = useState(false);
   const openCommandPalette = useCallback(() => setCommandOpen(true), []);
   const closeCommandPalette = useCallback(() => setCommandOpen(false), []);
   const sessionRef = useRef<MeetingSession | null>(null);
@@ -389,6 +399,19 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
             setError(formatFatalServerError(event));
             setStatus("error");
           }
+
+          if (event.type === "assist-suggestion") {
+            setAssistSuggestion(event.suggestion);
+            setAssistUnavailable(null);
+            setAssistPending(false);
+            return;
+          }
+
+          if (event.type === "assist-unavailable") {
+            setAssistUnavailable(event.reason);
+            setAssistPending(false);
+            return;
+          }
         };
 
         socket.onclose = () => {
@@ -403,6 +426,33 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       markRecoverableTranscriptionIssue,
     ],
   );
+
+  const requestAssist = useCallback((turns: AssistTurn[], manual: boolean) => {
+    const socket = wsRef.current;
+    const sessionId = sessionRef.current?.id;
+    if (!socket || socket.readyState !== WebSocket.OPEN || !sessionId) {
+      return;
+    }
+    // A manual ask clears the last suggestion and shows a spinner; auto ticks
+    // stay quiet until something actually comes back.
+    if (manual) {
+      setAssistSuggestion(null);
+      setAssistUnavailable(null);
+      setAssistPending(true);
+    }
+    socket.send(
+      JSON.stringify({ type: "assist-request", sessionId, turns, manual }),
+    );
+  }, []);
+
+  const handleAssistEnabledChange = useCallback((next: boolean) => {
+    setAssistEnabled(next);
+    if (!next) {
+      setAssistSuggestion(null);
+      setAssistUnavailable(null);
+      setAssistPending(false);
+    }
+  }, []);
 
   const resetPcmBuffer = useCallback(() => {
     pcmBufferRef.current = [];
@@ -1602,6 +1652,17 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
               onDismiss={clearNotice}
             />
           ) : null}
+
+          <LiveAssistPanel
+            enabled={assistEnabled}
+            onEnabledChange={handleAssistEnabledChange}
+            segments={segments}
+            isLive={status === "recording" || status === "connecting"}
+            pending={assistPending}
+            suggestion={assistSuggestion}
+            unavailableReason={assistUnavailable}
+            onRequest={requestAssist}
+          />
 
           <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
             <TranscriptPanel

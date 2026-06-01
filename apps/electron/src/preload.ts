@@ -15,6 +15,17 @@ type WorkspaceCommand =
   | 'mila:desktop-start-mic'
   | 'mila:desktop-stop-mic';
 
+// State the web workspace forwards to drive the floating coaching overlay. The
+// suggestion is passed through opaquely (the overlay normalizes it); the main
+// process decides whether to render based on the overlay preference.
+type AssistOverlayState = {
+  enabled?: boolean;
+  live?: boolean;
+  pending?: boolean;
+  suggestion?: unknown;
+  unavailable?: 'no-model' | 'no-suggestion' | null;
+};
+
 const PENDING_WORKSPACE_COMMAND_KEY = 'mila:pending-desktop-command';
 const commandListenerCounts = new Map<CommandChannel, number>();
 
@@ -33,6 +44,17 @@ const milaBridge = {
   installUpdateAndRestart: () => ipcRenderer.invoke('mila:updates:install'),
   openExternal: (url: string) => ipcRenderer.invoke('mila:open-external', url),
   showItemInFolder: (path: string) => ipcRenderer.invoke('mila:show-in-folder', path),
+  // Live coaching copilot bridge. `assist.update` feeds the floating overlay;
+  // `loopback.isSupported` lets the renderer know whether it can capture the
+  // remote party's audio (system loopback) rather than mic-only.
+  assist: {
+    update: (state: AssistOverlayState) =>
+      ipcRenderer.invoke('mila:assist:overlay-update', state),
+  },
+  loopback: {
+    isSupported: (): Promise<boolean> =>
+      ipcRenderer.invoke('mila:loopback:supported'),
+  },
   onUpdateStatus: (cb: (status: string, info?: unknown) => void) => {
     const handler = (_e: Electron.IpcRendererEvent, status: string, info?: unknown) =>
       cb(status, info);

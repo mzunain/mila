@@ -7,6 +7,9 @@ import {
   checkForUpdatesInteractive,
   installUpdateAndRestart,
 } from './updater';
+import { ingestAssistState } from './assist-overlay-window';
+import { loopbackSupportedHere } from './loopback';
+import type { AssistStateInput } from './assist-overlay-content';
 
 export function registerIpcHandlers(getWindow: () => BrowserWindow | null) {
   ipcMain.handle('mila:prefs:get', () => getPrefs());
@@ -44,4 +47,12 @@ export function registerIpcHandlers(getWindow: () => BrowserWindow | null) {
     if (typeof target !== 'string' || !target) return;
     shell.showItemInFolder(target);
   });
+
+  // The web workspace forwards live coaching state; the overlay renders it only
+  // when the user has the floating overlay enabled (driven from the tray).
+  ipcMain.handle('mila:assist:overlay-update', (_e, state: AssistStateInput) => {
+    ingestAssistState(state ?? {});
+  });
+
+  ipcMain.handle('mila:loopback:supported', () => loopbackSupportedHere());
 }

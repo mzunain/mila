@@ -150,6 +150,20 @@ interface MeetingWorkspaceProps {
 const PENDING_WORKSPACE_COMMAND_KEY = "mila:pending-desktop-command";
 const STORED_AUTO_START_SIGNAL_TTL_MS = 10 * 60 * 1000;
 
+// Narrow view of the Electron preload bridge used to drive the desktop coaching
+// overlay. Declared locally so the web build stays decoupled from the shell.
+type AssistDesktopBridge = {
+  assist?: {
+    update: (state: {
+      enabled: boolean;
+      live: boolean;
+      pending: boolean;
+      suggestion: AssistSuggestion | null;
+      unavailable: "no-model" | "no-suggestion" | null;
+    }) => void;
+  };
+};
+
 export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const { preferences } = usePreferences();
   const apiHttpUrl = useMemo(() => resolveApiUrl(preferences), [preferences]);
@@ -453,6 +467,21 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       setAssistPending(false);
     }
   }, []);
+
+  // Mirror the live coaching state into the desktop floating overlay so talking
+  // points stay visible while the call app is focused over Mila. Inert in the
+  // browser — the bridge only exists inside the Electron shell.
+  useEffect(() => {
+    const bridge = (window as Window & { mila?: AssistDesktopBridge }).mila;
+    if (!bridge?.assist) return;
+    bridge.assist.update({
+      enabled: assistEnabled,
+      live: status === "recording" || status === "connecting",
+      pending: assistPending,
+      suggestion: assistEnabled ? assistSuggestion : null,
+      unavailable: assistEnabled ? assistUnavailable : null,
+    });
+  }, [assistEnabled, status, assistPending, assistSuggestion, assistUnavailable]);
 
   const resetPcmBuffer = useCallback(() => {
     pcmBufferRef.current = [];

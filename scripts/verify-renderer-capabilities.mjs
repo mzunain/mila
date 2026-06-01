@@ -94,6 +94,20 @@ const expr = `(async () => {
     out.supportsRealAudio = j.supportsRealAudio;
     out.realAudioHint = j.realAudioHint;
   } catch (e) { out.fetchError = String(e); }
+  // Scan the live DOM (the actual mounted component, which now resolves
+  // capabilities through the refactored fetchCapabilities mount effect) for any
+  // demo-mode / "not configured" banner — it must be absent when ASR is real.
+  try {
+    const text = (document.body && document.body.innerText || '').toLowerCase();
+    out.domNotConfigured = text.includes('not configured');
+    out.domDemoMode =
+      text.includes('demo only') ||
+      text.includes('demo mode') ||
+      text.includes('mock asr');
+    out.isLoginPage =
+      !!document.querySelector('input[type="password"]') ||
+      /sign in|log in|continue with/.test(text);
+  } catch (e) { out.domError = String(e); }
   return JSON.stringify(out);
 })()`;
 

@@ -177,4 +177,73 @@ describe('MeetingsService', () => {
     const listed = await service.listSessions(USER_ID);
     expect(listed.map((s) => s.id)).toEqual([mine.session.id]);
   });
+
+  it('includes notes intelligence in the session list', async () => {
+    const { session } = await service.createSession(USER_ID, {
+      title: 'Launch review',
+      outputLanguage: 'en',
+    });
+
+    await service.ingestTranscriptChunk(USER_ID, {
+      type: 'transcript-chunk',
+      sessionId: session.id,
+      chunkId: 'caption-1',
+      capturedAt: new Date().toISOString(),
+      text: 'We decided to publish the desktop build tomorrow.',
+    });
+    await service.ingestTranscriptChunk(USER_ID, {
+      type: 'transcript-chunk',
+      sessionId: session.id,
+      chunkId: 'caption-2',
+      capturedAt: new Date().toISOString(),
+      text: 'Please send the production QA checklist before launch.',
+    });
+    await service.completeSession(USER_ID, session.id);
+
+    const listed = await service.listSessions(USER_ID);
+    const preview = listed[0]?.notesPreview;
+
+    expect(listed[0]?.title).toBe('Launch review');
+    expect(preview?.summary).toContain('Final summary');
+    expect(preview?.decisionCount).toBe(1);
+    expect(preview?.actionStats.total).toBe(1);
+    expect(preview?.actionStats.open).toBe(1);
+    expect(preview?.actionStats.riskLevel).toBe('needs-owners');
+  });
+
+  it('builds an action inbox across sessions owned by the calling user', async () => {
+    const mine = await service.createSession(USER_ID, {
+      title: 'Launch review',
+      outputLanguage: 'en',
+    });
+    const theirs = await service.createSession(OTHER_USER_ID, {
+      title: 'Other user review',
+      outputLanguage: 'en',
+    });
+
+    await service.ingestTranscriptChunk(USER_ID, {
+      type: 'transcript-chunk',
+      sessionId: mine.session.id,
+      chunkId: 'caption-1',
+      capturedAt: new Date().toISOString(),
+      text: 'Please send the launch checklist before release.',
+    });
+    await service.ingestTranscriptChunk(OTHER_USER_ID, {
+      type: 'transcript-chunk',
+      sessionId: theirs.session.id,
+      chunkId: 'caption-1',
+      capturedAt: new Date().toISOString(),
+      text: 'Please send the private customer recap.',
+    });
+
+    const inbox = await service.getActionInbox(USER_ID);
+
+    expect(inbox.totalOpen).toBe(1);
+    expect(inbox.sessionsWithOpenActions).toBe(1);
+    expect(inbox.missingOwner).toBe(1);
+    expect(inbox.items).toHaveLength(1);
+    expect(inbox.items[0]?.sessionId).toBe(mine.session.id);
+    expect(inbox.items[0]?.sessionTitle).toBe('Launch review');
+    expect(inbox.items[0]?.text).toContain('launch checklist');
+  });
 });

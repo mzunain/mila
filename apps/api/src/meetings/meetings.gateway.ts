@@ -195,9 +195,10 @@ export class MeetingsGateway {
         `ASR timeout (chunk ${error.chunkId}, ${error.timeoutMs}ms) — dropping chunk and continuing`,
       );
       this.send(client, {
-        type: 'error',
+        type: 'status',
         code: 'ASR_TIMEOUT',
-        message: `Transcription is falling behind — chunk ${error.chunkId} was skipped. The session is still recording.`,
+        severity: 'info',
+        message: `Audio chunk ${error.chunkId} timed out and was skipped. The session is still recording.`,
       });
       return;
     }
@@ -207,9 +208,10 @@ export class MeetingsGateway {
 
     if (event.type === 'audio-chunk') {
       this.send(client, {
-        type: 'error',
+        type: 'status',
         code: 'ASR_ERROR',
-        message: `Transcription failed for one audio chunk (${description}). The session is still recording.`,
+        severity: 'warning',
+        message: `One audio chunk could not be transcribed (${description}). The session is still recording.`,
       });
       return;
     }

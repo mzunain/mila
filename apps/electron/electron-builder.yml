@@ -42,6 +42,7 @@ mac:
   icon: assets/icon.icns
   extendInfo:
     NSMicrophoneUsageDescription: Mila needs microphone access to capture live meeting audio for transcription.
+    NSCalendarsUsageDescription: Mila reads upcoming calendar events to show scheduled calls in the menu bar.
     NSCameraUsageDescription: Mila does not record video, but some browser pages may request the camera.
     NSAppleEventsUsageDescription: Mila uses AppleEvents to detect meeting apps on this Mac.
     NSScreenCaptureDescription: Mila may capture system audio from meetings you attend.

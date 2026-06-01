@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   classifyCallApp,
   parseAudioAssertionPids,
+  probePowerAssertions,
   probeProcessList,
 } from './meeting-detector';
 
@@ -35,6 +36,11 @@ const TEAMS_IN_CALL = `
 /Applications/Microsoft Teams.app/Contents/MacOS/MSTeams
 /Applications/Microsoft Teams.app/Contents/PlugIns/TeamsWidgetExtension.appex/Contents/MacOS/TeamsWidgetExtension
 Core Audio Driver (MSTeamsAudioDevice.driver)
+`;
+
+const CHROME_CAMERA_IN_USE = `
+/Applications/Google Chrome.app/Contents/MacOS/Google Chrome
+/Applications/Google Chrome.app/Contents/Frameworks/Google Chrome Framework.framework/Versions/137.0.7151.56/Helpers/Google Chrome Helper.app/Contents/MacOS/Google Chrome Helper --type=utility --utility-sub-type=video_capture.mojom.VideoCaptureService --lang=en-US --service-sandbox-type=none
 `;
 
 const NOTHING_INTERESTING = `
@@ -80,6 +86,14 @@ test('probeProcessList detects a Teams call via the audio driver + app combo', (
   const detection = probeProcessList(TEAMS_IN_CALL);
   assert.ok(detection);
   assert.equal(detection.provider, 'microsoft-teams');
+});
+
+test('probeProcessList detects Chrome browser media capture as a call', () => {
+  const detection = probeProcessList(CHROME_CAMERA_IN_USE);
+  assert.ok(detection);
+  assert.equal(detection.provider, 'google-meet');
+  assert.equal(detection.title, 'Chrome call');
+  assert.equal(detection.detectedAppName, 'Chrome');
 });
 
 test('probeProcessList does not fire on Teams audio driver without the Teams app', () => {
@@ -144,6 +158,13 @@ test('parseAudioAssertionPids extracts PIDs from coreaudiod mic-in assertions', 
   assert.deepEqual(pids, [64440]);
 });
 
+test('probePowerAssertions detects WhatsApp call idle-timer assertions', () => {
+  const detection = probePowerAssertions(PMSET_WHATSAPP_IN_CALL);
+  assert.ok(detection);
+  assert.equal(detection.provider, 'whatsapp');
+  assert.equal(detection.title, 'WhatsApp call');
+});
+
 test('parseAudioAssertionPids ignores audio-out-only assertions (music playback)', () => {
   const pids = parseAudioAssertionPids(PMSET_MUSIC_PLAYBACK_ONLY);
   assert.deepEqual(pids, []);
@@ -158,6 +179,13 @@ test('classifyCallApp maps WhatsApp to the whatsapp provider', () => {
   assert.ok(detection);
   assert.equal(detection.provider, 'whatsapp');
   assert.equal(detection.title, 'WhatsApp call');
+});
+
+test('classifyCallApp maps Zoom mic assertions to the zoom provider', () => {
+  const detection = classifyCallApp('zoom.us');
+  assert.ok(detection);
+  assert.equal(detection.provider, 'zoom');
+  assert.equal(detection.title, 'Zoom meeting');
 });
 
 test('classifyCallApp is case-insensitive', () => {
@@ -188,4 +216,5 @@ test('classifyCallApp matches Chrome/Chromium as google-meet (best-effort)', () 
   const detection = classifyCallApp('Google Chrome');
   assert.ok(detection);
   assert.equal(detection.provider, 'google-meet');
+  assert.equal(detection.detectedAppName, 'Chrome');
 });

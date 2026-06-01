@@ -1,13 +1,18 @@
-import { BrowserWindow, shell, nativeTheme } from 'electron';
+import { app, BrowserWindow, shell, nativeTheme } from 'electron';
 import path from 'node:path';
 import { DEFAULT_WINDOW, isDev, ASSETS_DIR } from './config';
 import { prefs } from './store';
+import {
+  readLoginItemSettings,
+  shouldShowMainWindowOnReady,
+} from './login-item';
 
 const PRELOAD_PATH = path.join(__dirname, 'preload.js');
 
 export function createMainWindow(loadUrl: string): BrowserWindow {
   const bounds = prefs.get('windowBounds');
   const theme = prefs.get('theme');
+  const icon = getIcon();
   if (theme === 'light' || theme === 'dark') {
     nativeTheme.themeSource = theme;
   } else {
@@ -23,7 +28,7 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
     minHeight: DEFAULT_WINDOW.minHeight,
     title: 'Mila',
     backgroundColor: nativeTheme.shouldUseDarkColors ? '#0a0a0a' : '#fafafa',
-    icon: getIcon(),
+    ...(icon ? { icon } : {}),
     titleBarStyle: process.platform === 'darwin' ? 'hiddenInset' : 'default',
     trafficLightPosition: process.platform === 'darwin' ? { x: 16, y: 16 } : undefined,
     autoHideMenuBar: process.platform !== 'darwin',
@@ -39,7 +44,12 @@ export function createMainWindow(loadUrl: string): BrowserWindow {
   });
 
   win.once('ready-to-show', () => {
-    if (!prefs.get('startMinimized')) {
+    if (
+      shouldShowMainWindowOnReady(
+        { startMinimized: prefs.get('startMinimized') },
+        readLoginItemSettings(app),
+      )
+    ) {
       win.show();
     }
   });

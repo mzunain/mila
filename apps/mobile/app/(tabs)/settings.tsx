@@ -159,7 +159,7 @@ function Row({
         pressed && { backgroundColor: "#121822" },
       ]}
     >
-      <Ionicons name={icon} size={18} color="#94a3b8" />
+      <Ionicons name={icon} size={18} color="#a6a29b" />
       <Text style={styles.rowLabel}>{label}</Text>
       {value && <Text style={styles.rowValue}>{value}</Text>}
       {onPress && <Ionicons name="chevron-forward" size={16} color="#475569" />}
@@ -168,7 +168,7 @@ function Row({
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0a0d12" },
+  safe: { flex: 1, backgroundColor: "#0f1012" },
   container: { padding: 20, gap: 20, paddingBottom: 40 },
   header: { gap: 4 },
   eyebrow: {
@@ -183,8 +183,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 14,
     padding: 16,
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderRadius: 14,
   },
@@ -192,13 +192,13 @@ const styles = StyleSheet.create({
     height: 44,
     width: 44,
     borderRadius: 22,
-    backgroundColor: "rgba(110, 231, 183, 0.18)",
+    backgroundColor: "rgba(103, 232, 249, 0.18)",
     alignItems: "center",
     justifyContent: "center",
   },
-  avatarText: { color: "#6ee7b7", fontWeight: "700", fontSize: 18 },
+  avatarText: { color: "#67e8f9", fontWeight: "700", fontSize: 18 },
   cardTitle: { color: "#fff", fontSize: 15, fontWeight: "600" },
-  cardSubtitle: { color: "#94a3b8", fontSize: 13 },
+  cardSubtitle: { color: "#a6a29b", fontSize: 13 },
   section: { gap: 10 },
   sectionTitle: {
     color: "#64748b",
@@ -208,8 +208,8 @@ const styles = StyleSheet.create({
     paddingLeft: 4,
   },
   sectionBody: {
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderRadius: 12,
     overflow: "hidden",
@@ -220,7 +220,7 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingHorizontal: 14,
     paddingVertical: 14,
-    borderBottomColor: "#1e293b",
+    borderBottomColor: "#2b2d33",
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   rowLabel: { color: "#e2e8f0", fontSize: 14, flex: 1 },

@@ -1,4 +1,4 @@
-import type { MeetingSession } from "@mila/shared";
+import type { MeetingSession, MeetingSessionListItem } from "@mila/shared";
 import { Ionicons } from "@expo/vector-icons";
 import { router } from "expo-router";
 import { useCallback, useEffect, useState } from "react";
@@ -17,7 +17,9 @@ import { apiFetch } from "@/lib/api";
 
 export default function SessionsScreen() {
   const { token } = useAuth();
-  const [sessions, setSessions] = useState<MeetingSession[] | null>(null);
+  const [sessions, setSessions] = useState<MeetingSessionListItem[] | null>(
+    null,
+  );
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -27,7 +29,7 @@ export default function SessionsScreen() {
     try {
       const response = await apiFetch("/api/sessions", { token });
       if (!response.ok) throw new Error(`${response.status}`);
-      const data = (await response.json()) as MeetingSession[];
+      const data = (await response.json()) as MeetingSessionListItem[];
       setSessions(data);
     } catch (err) {
       setError(
@@ -55,7 +57,7 @@ export default function SessionsScreen() {
 
       {sessions === null && !error ? (
         <View style={styles.loading}>
-          <ActivityIndicator color="#6ee7b7" />
+          <ActivityIndicator color="#67e8f9" />
         </View>
       ) : sessions && sessions.length > 0 ? (
         <FlatList
@@ -66,7 +68,7 @@ export default function SessionsScreen() {
             <RefreshControl
               refreshing={refreshing}
               onRefresh={onRefresh}
-              tintColor="#6ee7b7"
+              tintColor="#67e8f9"
             />
           }
           renderItem={({ item }) => (
@@ -75,7 +77,7 @@ export default function SessionsScreen() {
         />
       ) : (
         <View style={styles.empty}>
-          <Ionicons name="mic-outline" size={36} color="#6ee7b7" />
+          <Ionicons name="mic-outline" size={36} color="#67e8f9" />
           <Text style={styles.emptyTitle}>Nothing here yet</Text>
           <Text style={styles.emptyBody}>
             {error
@@ -98,18 +100,23 @@ function SessionRow({
   session,
   onPress,
 }: {
-  session: MeetingSession;
+  session: MeetingSessionListItem;
   onPress: () => void;
 }) {
   const status = session.status;
   const statusColor =
     status === "live"
-      ? "#6ee7b7"
+      ? "#67e8f9"
       : status === "processing"
         ? "#fcd34d"
         : status === "failed"
           ? "#fca5a5"
-          : "#94a3b8";
+          : "#a6a29b";
+  const preview = session.notesPreview;
+  const summary =
+    preview?.summary ||
+    preview?.keyPoints[0] ||
+    getSessionFallbackCopy(session);
   return (
     <Pressable
       onPress={onPress}
@@ -123,9 +130,37 @@ function SessionRow({
         <Text style={styles.rowMeta} numberOfLines={1}>
           {formatRelative(new Date(session.createdAt))} · {session.outputLanguage.toUpperCase()}
         </Text>
+        <Text style={styles.rowSignal} numberOfLines={1}>
+          {formatSessionOutcome(session)}
+          {session.autoStarted || session.externalMeeting
+            ? ` · ${session.externalMeeting ? formatProvider(session.externalMeeting.provider) : "Auto"}`
+            : ""}
+        </Text>
+        <Text style={styles.rowSummary} numberOfLines={2}>
+          {summary}
+        </Text>
+        {preview ? (
+          <View style={styles.rowStats}>
+            <SessionStat label="Open" value={preview.actionStats.open} />
+            <SessionStat label="Decisions" value={preview.decisionCount} />
+            <SessionStat
+              label="Risk"
+              value={formatRisk(preview.actionStats.riskLevel)}
+            />
+          </View>
+        ) : null}
       </View>
       <Ionicons name="chevron-forward" size={18} color="#475569" />
     </Pressable>
+  );
+}
+
+function SessionStat({ label, value }: { label: string; value: number | string }) {
+  return (
+    <View style={styles.sessionStat}>
+      <Text style={styles.sessionStatValue}>{value}</Text>
+      <Text style={styles.sessionStatLabel}>{label}</Text>
+    </View>
   );
 }
 
@@ -141,8 +176,75 @@ function formatRelative(date: Date) {
   return date.toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
+function formatSessionOutcome(session: MeetingSessionListItem) {
+  if (session.status === "completed" && session.notesPreview) {
+    return session.notesPreview.actionStats.headline;
+  }
+
+  switch (session.status) {
+    case "live":
+      return "Capturing now";
+    case "processing":
+      return "Notes finalizing";
+    case "completed":
+      return "Ready for follow-up";
+    case "failed":
+      return "Needs retry";
+    case "scheduled":
+      return "Prep brief ready";
+  }
+}
+
+function getSessionFallbackCopy(session: MeetingSessionListItem) {
+  switch (session.status) {
+    case "live":
+      return "Mila is capturing this conversation now.";
+    case "processing":
+      return "Notes are being finalized from the captured transcript.";
+    case "completed":
+      return "Open to review transcript, notes, and follow-ups.";
+    case "failed":
+      return "Capture ended with an issue. Open to inspect recovery options.";
+    case "scheduled":
+      return "Prep context is ready before the meeting starts.";
+  }
+}
+
+function formatRisk(
+  risk: NonNullable<MeetingSessionListItem["notesPreview"]>["actionStats"]["riskLevel"],
+) {
+  switch (risk) {
+    case "empty":
+      return "None";
+    case "clear":
+      return "Clear";
+    case "needs-owners":
+      return "Owners";
+    case "needs-dates":
+      return "Dates";
+    case "overloaded":
+      return "High";
+  }
+}
+
+function formatProvider(provider: NonNullable<MeetingSession["externalMeeting"]>["provider"]) {
+  const labels: Record<
+    NonNullable<MeetingSession["externalMeeting"]>["provider"],
+    string
+  > = {
+    "google-meet": "Meet",
+    zoom: "Zoom",
+    "microsoft-teams": "Teams",
+    "slack-huddle": "Slack",
+    "whatsapp-web": "WhatsApp",
+    unknown: "Detected",
+  };
+
+  return labels[provider];
+}
+
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0a0d12" },
+  safe: { flex: 1, backgroundColor: "#0f1012" },
   header: { padding: 20, gap: 4 },
   eyebrow: {
     color: "#64748b",
@@ -159,19 +261,49 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 14,
     paddingHorizontal: 16,
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderRadius: 12,
   },
   statusDot: { height: 8, width: 8, borderRadius: 4 },
   rowBody: { flex: 1, gap: 4 },
   rowTitle: { color: "#fff", fontSize: 15, fontWeight: "600" },
-  rowMeta: { color: "#94a3b8", fontSize: 12 },
+  rowMeta: { color: "#a6a29b", fontSize: 12 },
+  rowSignal: { color: "#67e8f9", fontSize: 12, marginTop: 2 },
+  rowSummary: {
+    color: "#d7d3cb",
+    fontSize: 12,
+    lineHeight: 17,
+    marginTop: 3,
+  },
+  rowStats: {
+    flexDirection: "row",
+    gap: 8,
+    marginTop: 8,
+  },
+  sessionStat: {
+    minWidth: 58,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "#2b2d33",
+    backgroundColor: "#111217",
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+  },
+  sessionStatValue: { color: "#fff", fontSize: 13, fontWeight: "700" },
+  sessionStatLabel: {
+    color: "#a6a29b",
+    fontSize: 9,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+    marginTop: 1,
+    textTransform: "uppercase",
+  },
   empty: { flex: 1, alignItems: "center", justifyContent: "center", padding: 30, gap: 12 },
   emptyTitle: { color: "#fff", fontSize: 18, fontWeight: "600" },
   emptyBody: {
-    color: "#94a3b8",
+    color: "#a6a29b",
     fontSize: 13,
     textAlign: "center",
     lineHeight: 18,
@@ -179,10 +311,10 @@ const styles = StyleSheet.create({
   },
   emptyButton: {
     marginTop: 8,
-    backgroundColor: "#6ee7b7",
+    backgroundColor: "#67e8f9",
     paddingHorizontal: 18,
     paddingVertical: 12,
     borderRadius: 10,
   },
-  emptyButtonText: { color: "#020617", fontWeight: "700" },
+  emptyButtonText: { color: "#061113", fontWeight: "700" },
 });

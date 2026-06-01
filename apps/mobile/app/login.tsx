@@ -113,7 +113,7 @@ export default function LoginScreen() {
           ]}
         >
           {busy ? (
-            <ActivityIndicator color="#020617" />
+            <ActivityIndicator color="#061113" />
           ) : (
             <Text style={styles.primaryButtonText}>
               {mode === "login" ? "Sign in" : "Create account"}
@@ -136,26 +136,26 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0a0d12" },
+  safe: { flex: 1, backgroundColor: "#0f1012" },
   container: { flex: 1, paddingHorizontal: 24, paddingTop: 24, gap: 16 },
   brand: { flexDirection: "row", alignItems: "center", gap: 10, marginBottom: 16 },
   logo: {
     height: 36,
     width: 36,
     borderRadius: 10,
-    backgroundColor: "#6ee7b7",
+    backgroundColor: "#67e8f9",
     alignItems: "center",
     justifyContent: "center",
   },
-  logoText: { color: "#020617", fontWeight: "700", fontSize: 18 },
+  logoText: { color: "#061113", fontWeight: "700", fontSize: 18 },
   brandName: { color: "#fff", fontSize: 22, fontWeight: "600" },
   title: { color: "#fff", fontSize: 28, fontWeight: "700" },
-  subtitle: { color: "#94a3b8", fontSize: 15, marginBottom: 12 },
+  subtitle: { color: "#a6a29b", fontSize: 15, marginBottom: 12 },
   field: { gap: 6 },
-  label: { color: "#cbd5e1", fontSize: 13, fontWeight: "500" },
+  label: { color: "#f4f1ec", fontSize: 13, fontWeight: "500" },
   input: {
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderRadius: 10,
     paddingHorizontal: 14,
@@ -166,14 +166,14 @@ const styles = StyleSheet.create({
   error: { color: "#fca5a5", fontSize: 13 },
   primaryButton: {
     marginTop: 6,
-    backgroundColor: "#6ee7b7",
+    backgroundColor: "#67e8f9",
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center",
   },
-  primaryButtonText: { color: "#020617", fontSize: 15, fontWeight: "700" },
+  primaryButtonText: { color: "#061113", fontSize: 15, fontWeight: "700" },
   switchMode: {
-    color: "#94a3b8",
+    color: "#a6a29b",
     textAlign: "center",
     marginTop: 18,
     fontSize: 13,

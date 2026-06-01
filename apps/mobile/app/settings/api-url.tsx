@@ -74,7 +74,7 @@ export default function ApiUrlScreen() {
           style={styles.iconButton}
           accessibilityLabel="Close"
         >
-          <Ionicons name="chevron-down" size={24} color="#cbd5e1" />
+          <Ionicons name="chevron-down" size={24} color="#f4f1ec" />
         </Pressable>
         <Text style={styles.headerTitle}>API URL</Text>
         <View style={{ width: 40 }} />
@@ -132,7 +132,7 @@ export default function ApiUrlScreen() {
               ]}
             >
               {status === "saving" ? (
-                <ActivityIndicator color="#020617" />
+                <ActivityIndicator color="#061113" />
               ) : (
                 <Text style={styles.primaryText}>Save & verify</Text>
               )}
@@ -165,7 +165,7 @@ function isValidHttpUrl(value: string) {
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: "#0a0d12" },
+  safe: { flex: 1, backgroundColor: "#0f1012" },
   flex: { flex: 1 },
   header: {
     flexDirection: "row",
@@ -173,7 +173,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     paddingHorizontal: 8,
     paddingVertical: 10,
-    borderBottomColor: "#1e293b",
+    borderBottomColor: "#2b2d33",
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
   iconButton: { height: 40, width: 40, alignItems: "center", justifyContent: "center" },
@@ -190,30 +190,30 @@ const styles = StyleSheet.create({
     fontSize: 15,
     paddingHorizontal: 14,
     paddingVertical: 12,
-    backgroundColor: "#0f141b",
-    borderColor: "#1e293b",
+    backgroundColor: "#18191e",
+    borderColor: "#2b2d33",
     borderWidth: 1,
     borderRadius: 10,
   },
-  hint: { color: "#94a3b8", fontSize: 12, lineHeight: 17 },
+  hint: { color: "#a6a29b", fontSize: 12, lineHeight: 17 },
   message: { fontSize: 13, marginTop: 4 },
   messageError: { color: "#fca5a5" },
-  messageOk: { color: "#6ee7b7" },
-  messageMuted: { color: "#94a3b8" },
+  messageOk: { color: "#67e8f9" },
+  messageMuted: { color: "#a6a29b" },
   actions: { gap: 10, marginTop: 12 },
   primary: {
-    backgroundColor: "#6ee7b7",
+    backgroundColor: "#67e8f9",
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: "center",
   },
-  primaryText: { color: "#020617", fontWeight: "700", fontSize: 15 },
+  primaryText: { color: "#061113", fontWeight: "700", fontSize: 15 },
   secondary: {
     paddingVertical: 14,
     borderRadius: 12,
     alignItems: "center",
-    borderColor: "#1e293b",
+    borderColor: "#2b2d33",
     borderWidth: 1,
   },
-  secondaryText: { color: "#cbd5e1", fontWeight: "600", fontSize: 14 },
+  secondaryText: { color: "#f4f1ec", fontWeight: "600", fontSize: 14 },
 });

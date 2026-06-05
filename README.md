@@ -1,8 +1,30 @@
 # Mila
 
-A multilingual AI meeting-notes assistant for live and uploaded conversations.
-Mila records, transcribes (faster-whisper), summarises (Gemini / OpenRouter /
-NVIDIA NIM), and ships as a desktop app (Electron) plus a web UI.
+Mila is a multilingual AI meeting-notes assistant for live calls and uploaded
+conversations. It records audio, transcribes speech with faster-whisper,
+generates structured notes with Gemini / OpenRouter / NVIDIA NIM, and ships as
+an Electron desktop app backed by a NestJS API, Redis, Postgres with pgvector,
+and Docker.
+
+<p>
+  <img src="apps/web/public/landing/mila-hero-product.png" alt="Mila meeting notes desktop and mobile interface" width="100%">
+</p>
+
+## What Mila does
+
+- Captures live meeting audio from the desktop app or accepts uploaded audio.
+- Produces multilingual transcripts with a faster-whisper ASR worker.
+- Generates summaries, decisions, action items, and follow-up notes with LLMs.
+- Stores meeting context in Postgres / pgvector for retrieval and chat.
+- Runs locally as a multi-service stack with Electron, Next.js, NestJS, Redis,
+  and Docker Compose.
+
+## Download
+
+Desktop builds are published on the
+[GitHub releases page](https://github.com/mzunain/mila/releases/latest). The app
+expects a backend reachable at `http://localhost:7400`; use `./run.sh` to start
+the local backend stack.
 
 ## Architecture at a glance
 
@@ -159,7 +181,7 @@ pnpm dev:asr            # binds 127.0.0.1:9000
 
 ```bash
 pnpm build:desktop      # compiles TS only
-pnpm dist:desktop:mac   # produces apps/electron/dist/*.dmg
+pnpm dist:desktop:mac   # produces apps/electron/out/*.dmg
 ```
 
 Other targets: `dist:desktop:win`, `dist:desktop:linux`, `dist:desktop:all`.
@@ -193,13 +215,6 @@ pnpm check            # lint + typecheck + test + build
 ```
 
 See `package.json` for the full list.
-
-## Security checklist before going public
-
-- Rotate any keys that ever lived in your local `.env`.
-- Replace `JWT_SECRET` with a long random value (`openssl rand -hex 48`).
-- Put a reverse proxy with TLS in front of the API.
-- Lock down `WEB_ORIGIN` to the exact origin(s) you serve.
 
 ## License
 

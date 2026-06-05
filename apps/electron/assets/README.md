@@ -6,6 +6,9 @@ fall back to the default Electron icon.
 
 ## Generate icons
 
+For macOS release builds, `pnpm dist:desktop:mac` generates `icon.icns` from
+`icon.svg` automatically before packaging.
+
 The easiest tool is [`electron-icon-builder`](https://www.npmjs.com/package/electron-icon-builder):
 
 ```bash

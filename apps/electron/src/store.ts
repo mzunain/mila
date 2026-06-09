@@ -22,7 +22,7 @@ const DEFAULTS: Preferences = {
   apiUrl: process.env.MILA_API_INTERNAL_URL ?? 'http://localhost:7400',
   wsUrl: process.env.NEXT_PUBLIC_API_WS_URL ?? 'ws://localhost:7400/meetings/live',
   startMinimized: false,
-  launchAtLogin: true,
+  launchAtLogin: false,
   launchAtLoginConfigured: false,
   showUpcomingInMenuBar: true,
   showEventsWithoutParticipants: true,
@@ -49,7 +49,7 @@ function load(): Preferences {
     const parsed = JSON.parse(raw) as Partial<Preferences>;
     next = { ...DEFAULTS, ...parsed };
     if (parsed.launchAtLoginConfigured !== true) {
-      next.launchAtLogin = true;
+      next.launchAtLogin = false;
       next.launchAtLoginConfigured = true;
       shouldPersist = true;
     }
@@ -67,7 +67,7 @@ function load(): Preferences {
   } catch {
     next = {
       ...DEFAULTS,
-      launchAtLogin: true,
+      launchAtLogin: false,
       launchAtLoginConfigured: true,
     };
     shouldPersist = true;

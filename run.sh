@@ -239,8 +239,26 @@ start_backend() {
 
 stop_stack() {
   cd "$ROOT_DIR"
-  ensure_docker
-  compose down
+
+  # Stop the Docker backend stack. Tolerate a stopped daemon so "stop everything"
+  # never fails just because the runtime is already down.
+  if docker info >/dev/null 2>&1; then
+    compose down
+  else
+    warn "Docker daemon is not running; no containers to stop."
+  fi
+
+  # Also stop any host-run dev servers (./run.sh dev) still holding the MILA ports.
+  local port pids
+  for port in 7300 7400; do
+    pids="$(lsof -ti "tcp:$port" 2>/dev/null || true)"
+    if [[ -n "$pids" ]]; then
+      log "Stopping dev server on :$port"
+      kill $pids 2>/dev/null || true
+    fi
+  done
+
+  log "Everything stopped."
 }
 
 clean_stack() {

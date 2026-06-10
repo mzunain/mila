@@ -26,6 +26,22 @@ type AssistOverlayState = {
   unavailable?: 'no-model' | 'no-suggestion' | null;
 };
 
+// Payload for raising an OS notification from the renderer (mention alerts).
+type DesktopNotificationInput = {
+  title: string;
+  body: string;
+  /** Echoed back on click so the renderer can jump to the exact mention. */
+  tag?: string;
+  silent?: boolean;
+};
+
+// State the workspace forwards so the menu-bar shows a live recording badge.
+// `active` is the only thing the tray needs; `title` rides along for the tooltip.
+type RecordingStateInput = {
+  active: boolean;
+  title?: string;
+};
+
 const PENDING_WORKSPACE_COMMAND_KEY = 'mila:pending-desktop-command';
 const commandListenerCounts = new Map<CommandChannel, number>();
 
@@ -54,6 +70,29 @@ const milaBridge = {
   loopback: {
     isSupported: (): Promise<boolean> =>
       ipcRenderer.invoke('mila:loopback:supported'),
+  },
+  // Tells the main process whether a live transcription is running, so the
+  // menu-bar can show an unmistakable "🔴 REC" badge even while the Mila window
+  // is hidden behind the call. Gated by the renderer on the user's "Live meeting
+  // indicator" preference.
+  recording: {
+    setState: (state: RecordingStateInput) =>
+      ipcRenderer.invoke('mila:recording:state', state),
+  },
+  // Generic OS notifications, used by mention alerts when the meeting window is
+  // backgrounded. `show` resolves to whether the notification was actually
+  // posted; `onActivated` fires when the user clicks one (the main process
+  // focuses the window first, then passes back the notification's tag).
+  notifications: {
+    isSupported: (): Promise<boolean> =>
+      ipcRenderer.invoke('mila:notify:supported'),
+    show: (input: DesktopNotificationInput): Promise<boolean> =>
+      ipcRenderer.invoke('mila:notify:show', input),
+    onActivated: (cb: (tag: string | null) => void) => {
+      const handler = (_e: Electron.IpcRendererEvent, tag: string | null) => cb(tag);
+      ipcRenderer.on('mila:notify:activated', handler);
+      return () => ipcRenderer.removeListener('mila:notify:activated', handler);
+    },
   },
   onUpdateStatus: (cb: (status: string, info?: unknown) => void) => {
     const handler = (_e: Electron.IpcRendererEvent, status: string, info?: unknown) =>

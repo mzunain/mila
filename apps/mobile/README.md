@@ -1,6 +1,11 @@
 # Mila Mobile
 
-React Native + Expo app — iOS and Android. Shares the Mila API and `@mila/shared` types with the web app.
+Experimental React Native + Expo app for iOS and Android. It shares the Mila
+API and `@mila/shared` types with the web app, but it is not part of the v0.1
+supported product surface.
+
+Current limitation: recording uploads one audio chunk after stop; it is not a
+low-latency live transcription client.
 
 ## Stack
 
@@ -45,7 +50,9 @@ Then update `src/lib/api.ts` to read from `process.env.EXPO_PUBLIC_API_URL` if s
 
 ## Building for the stores
 
-We use **EAS Build** (Expo's cloud build service).
+Deferred for v0.1. The app is useful for local experiments only until live
+chunk streaming and store-ready QA are done. If you still want an experimental
+build, use **EAS Build** (Expo's cloud build service).
 
 ```bash
 # one-time

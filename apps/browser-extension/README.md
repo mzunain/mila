@@ -1,15 +1,22 @@
 # Mila Browser Extension
 
-Development extension for browser meeting detection and Google Meet caption bridging.
+Experimental extension for browser meeting detection and Google Meet caption
+bridging. It is not part of the v0.1 supported product surface.
 
-It detects meeting URLs and starts a matching Mila session:
+Current limitation: the local API is authenticated, but this extension still has
+old unauthenticated bridge code and retired local ports. Do not rely on it until
+it uses the logged-in Mila web session safely.
+
+Intended scope:
 
 - Google Meet: `meet.google.com`
 - Zoom web: `zoom.us`
 - Microsoft Teams web: `teams.microsoft.com`
 - WhatsApp Web: `web.whatsapp.com`
 
-For Google Meet, it also watches the meeting page for visible caption text and streams those caption lines into Mila through the local WebSocket API. Google Meet captions must be turned on in the meeting UI for this path to produce text.
+For Google Meet, it is intended to watch visible caption text and forward those
+caption lines into Mila. Google Meet captions must be turned on in the meeting
+UI for this path to produce text.
 
 ## Load in Chrome/Chromium
 
@@ -21,8 +28,8 @@ For Google Meet, it also watches the meeting page for visible caption text and s
 ## Current Scope
 
 - Detect meeting/call tabs.
-- Open Mila with a real `sessionId`.
-- Stream Google Meet caption text into the live transcript and notes panel when Meet captions are enabled.
-- Use `mockAudio=0` by default.
+- Open Mila from a detected meeting.
+- Forward Google Meet caption text after the authenticated bridge is fixed.
 
-Tab audio capture is still the next extension-specific task. Native Zoom and WhatsApp desktop calls require the desktop app, not this browser extension.
+Tab audio capture is still the next extension-specific task. Native Zoom and
+WhatsApp desktop calls require the desktop app, not this browser extension.

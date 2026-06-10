@@ -1,0 +1,49 @@
+name: Release desktop
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mac:
+    name: macOS desktop build
+    runs-on: macos-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10.33.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20.19.5"
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build macOS desktop app
+        run: pnpm dist:desktop:mac
+
+      - name: Generate checksums
+        run: |
+          cd apps/electron/out
+          shasum -a 256 *.dmg *.zip *.blockmap latest-mac.yml > SHA256SUMS.txt
+
+      - name: Publish GitHub release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            apps/electron/out/*.dmg
+            apps/electron/out/*.zip
+            apps/electron/out/*.blockmap
+            apps/electron/out/latest-mac.yml
+            apps/electron/out/SHA256SUMS.txt

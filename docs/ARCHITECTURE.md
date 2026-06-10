@@ -26,8 +26,8 @@ Browser microphone
 
 ```txt
 Google Meet captions
-  -> Browser extension content script
-  -> Extension background bridge
+  -> Experimental browser extension content script
+  -> Extension background bridge (not supported in v0.1 until auth is fixed)
   -> WebSocket `transcript-chunk`
   -> NestJS Meeting Gateway
   -> transcript segment event fan-out
@@ -39,11 +39,11 @@ Google Meet captions
 Browser sandboxing prevents a plain web app from inspecting other tabs or native apps. Mila therefore treats meeting detection as a trusted signal pipeline:
 
 ```txt
-Calendar worker / browser extension / desktop bridge
+Calendar worker / desktop bridge
   -> meeting joined signal
-  -> Mila API creates an auto-started session
+  -> Mila web app creates an auto-started session
   -> Mila web app opens that existing session
-  -> extension or desktop bridge sends transcript/audio chunks
+  -> desktop bridge sends transcript/audio chunks
   -> microphone capture starts only when browser permission allows
 ```
 
@@ -57,8 +57,9 @@ Current supported signal shapes:
 Future production sources:
 
 - Google Calendar and Microsoft Graph calendar polling
-- Browser extension for Google Meet, Zoom web, Teams web, Slack huddles
-- Tauri desktop bridge for native meeting apps, system audio, tray auto-start
+- Browser extension for Google Meet, Zoom web, Teams web, Slack huddles after
+  it shares the logged-in web session token safely
+- Electron desktop bridge for native meeting apps, system audio, tray auto-start
 
 ## Real Audio Boundaries
 
@@ -71,9 +72,11 @@ Future production sources:
 Capture scope by client:
 
 - Web-only: microphone after browser permission; no other-tab or whole-device capture
-- Browser extension: meeting-tab detection and Google Meet caption bridge; tab audio capture is next
+- Browser extension: experimental only until it uses the authenticated web
+  session; not a supported capture surface in v0.1
 - Desktop app: system audio and native meeting app detection through OS APIs
-- Mobile app: microphone capture; background call capture is limited by platform rules
+- Mobile app: experimental upload recorder only; background call capture is
+  limited by platform rules
 
 ## Scalability Model
 
@@ -90,7 +93,8 @@ Capture scope by client:
 - `TranslationProvider`: normalizes source text into the selected output language.
 - `NotesProvider`: produces incremental and final structured notes.
 - `LlmNotesRouter`: routes note generation across Free Claude Code env, OpenRouter, NVIDIA NIM, local OpenAI-compatible servers, and heuristic fallback.
-- `EmbeddingProvider`: creates vectors for search.
+- `EmbeddingProvider`: local zero-cost hashed embeddings for pgvector-backed
+  meeting search; replaceable with a stronger embedding model later.
 - `ObjectStorageProvider`: stores raw audio in S3-compatible storage.
 
 ## Open-Source Defaults
@@ -99,7 +103,7 @@ Capture scope by client:
 - VAD: Silero VAD
 - LLM: Ollama for local development, vLLM for GPU production
 - Free hosted LLM route: NVIDIA NIM primary with OpenRouter free-model fallbacks when configured
-- DB: PostgreSQL with pgvector
+- DB: PostgreSQL with pgvector for local meeting search
 - Queue/cache: Redis + BullMQ
 - Media scale path: LiveKit
 

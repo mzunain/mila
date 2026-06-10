@@ -7,7 +7,7 @@ an Electron desktop app backed by a NestJS API, Redis, Postgres with pgvector,
 and Docker.
 
 <p>
-  <img src="apps/web/public/landing/mila-hero-product.png" alt="Mila meeting notes desktop and mobile interface" width="100%">
+  <img src="apps/web/public/landing/mila-hero-product.png" alt="Mila meeting notes desktop interface" width="100%">
 </p>
 
 ## What Mila does
@@ -15,7 +15,8 @@ and Docker.
 - Captures live meeting audio from the desktop app or accepts uploaded audio.
 - Produces multilingual transcripts with a faster-whisper ASR worker.
 - Generates summaries, decisions, action items, and follow-up notes with LLMs.
-- Stores meeting context in Postgres / pgvector for retrieval and chat.
+- Stores meeting sessions, transcript segments, notes, and action items in
+  Postgres, with local pgvector embeddings for meeting search.
 - Runs locally as a multi-service stack with Electron, Next.js, NestJS, Redis,
   and Docker Compose.
 
@@ -43,7 +44,7 @@ The desktop app is a thin client. You always need a backend reachable at
 
 ## Run locally in one command
 
-Requirements: Docker Desktop (or Docker Engine), Node.js 20.19+, and at least
+Requirements: Docker Desktop (or Docker Engine), Node.js 20.19.0+, and at least
 one LLM API key for chat/notes.
 
 ```bash
@@ -58,9 +59,9 @@ dependencies, applies Prisma migrations, and launches the API plus web UI.
 
 Open:
 
-| Service | URL |
-| ------- | --- |
-| Web UI  | http://localhost:7300 |
+| Service | URL                              |
+| ------- | -------------------------------- |
+| Web UI  | http://localhost:7300            |
 | API     | http://localhost:7400/api/health |
 
 Useful follow-up commands:
@@ -70,17 +71,23 @@ Useful follow-up commands:
 ./run.sh clean        # stop Docker services and wipe local DB data
 ./run.sh logs         # follow Docker logs
 ./run.sh backend      # run Docker backend only, without the web dev server
+pnpm bench:live-latency
 ```
 
 If `.env` was created for you, add at least one provider key such as
 `GOOGLE_API_KEY` or `OPENROUTER_API_KEY`; the app can boot without it, but
 chat and generated notes need a key.
 
+With the API running, the latency benchmark creates a local test user/session,
+sends live transcript chunks over the WebSocket, and reports min/p50/p95/max
+delivery times. To include ASR worker latency, run it with
+`MILA_BENCH_AUDIO_FILE=/path/to/sample.wav`.
+
 ## Start the backend automatically at login (macOS)
 
 The desktop app launches itself at login, but it is a thin client — without the
 Docker backend up, sessions fail with a 500 and ASR falls back to mock. To make
-MILA start *completely* after a restart, install a LaunchAgent that brings the
+MILA start _completely_ after a restart, install a LaunchAgent that brings the
 backend stack up headlessly when you log in:
 
 ```bash
@@ -124,12 +131,12 @@ docker compose up -d --build
 
 That brings up four services:
 
-| Service     | Port (host) | Notes                              |
-| ----------- | ----------- | ---------------------------------- |
-| `api`       | 7400        | NestJS, applies Prisma migrations  |
-| `postgres`  | 15432       | pgvector/pg17, volume `mila-postgres` |
-| `redis`     | 16379       | Cache / pubsub                     |
-| `asr-worker`| 9000        | faster-whisper, `small` by default |
+| Service      | Port (host) | Notes                                 |
+| ------------ | ----------- | ------------------------------------- |
+| `api`        | 7400        | NestJS, applies Prisma migrations     |
+| `postgres`   | 15432       | Postgres 17, volume `mila-postgres`   |
+| `redis`      | 16379       | Cache / pubsub                        |
+| `asr-worker` | 9000        | faster-whisper, `tiny` by default     |
 
 Verify:
 
@@ -150,7 +157,7 @@ You can run pieces on the host while leaving Postgres / Redis / ASR in
 containers.
 
 ```bash
-# Infra only (postgres on :15432, redis on :16379, asr-worker on :9000)
+# Infra only (postgres on :15432, redis on :16379, asr-worker on :9001)
 cd infra && docker compose up -d postgres redis asr-worker && cd -
 
 # Install JS deps
@@ -171,10 +178,8 @@ pnpm dev:desktop        # electron shell pointing at host API
 If you want to run ASR on the host instead of in Docker:
 
 ```bash
-cd apps/asr-worker
-python3.12 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-pnpm dev:asr            # binds 127.0.0.1:9000
+pnpm dev:asr:native     # binds 127.0.0.1:9000 and preloads Whisper
+# then set ASR_BASE_URL=http://127.0.0.1:9000 for the host API
 ```
 
 ## Build the desktop app
@@ -194,10 +199,8 @@ apps/
   asr-worker/       FastAPI + faster-whisper
   web/              Next.js (embedded in Electron)
   electron/         Desktop shell
-  mobile/           Expo (iOS + Android)
-  desktop/          (legacy)
-  browser-extension/
-  skill/
+  mobile/           Experimental Expo recorder, not part of v0.1 support
+  browser-extension/ Experimental Google Meet caption bridge, not supported yet
 packages/
   shared/           Types and helpers shared across apps
 infra/

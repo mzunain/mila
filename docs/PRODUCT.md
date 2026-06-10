@@ -27,7 +27,8 @@ Mila listens to live or uploaded conversations, preserves the original multiling
 - Original transcript and normalized transcript are stored separately
 - Per-segment language and direction metadata support mixed RTL/LTR text
 - Open-source-first AI stack with provider interfaces for future models
-- Product path covers web, desktop, and mobile without rewriting the core backend
+- Product path covers web and Electron desktop first; mobile is experimental
+  until the live desktop loop is reliable.
 
 ## Release Sequence
 
@@ -37,8 +38,10 @@ Mila listens to live or uploaded conversations, preserves the original multiling
 4. Persistence: PostgreSQL repositories, migrations, session history
 5. Notes engine: incremental and final notes with free-model/provider-routed LLM fallback
 6. Export: Markdown, PDF, copy, share links
-7. Search: pgvector embeddings and keyword search
-8. Apps: PWA hardening, Tauri desktop, mobile wrapper or native mobile client
+7. Search: keyword search first, then local pgvector embeddings for cited
+   meeting search
+8. Apps: Electron desktop hardening first; browser extension and mobile are
+   deferred
 
 ## Acceptance Criteria For Foundation
 
@@ -57,7 +60,8 @@ Mila listens to live or uploaded conversations, preserves the original multiling
 - Start with WebSocket audio chunks; keep a WebRTC/LiveKit migration path for scale
 - Store transcript segments as append-only events for auditability and replay
 - Use Redis/BullMQ for async notes, exports, embeddings, and model jobs
-- Use PostgreSQL as the source of truth and pgvector for semantic search
+- Use PostgreSQL as the source of truth; use pgvector for local meeting search
+  only after keyword search and transcript citations are working
 - Keep local mock providers so the app works without paid APIs
 - Route LLM notes through OpenAI-compatible adapters so OpenRouter, NVIDIA NIM, Ollama, LM Studio, llama.cpp, and future providers can be swapped without changing meeting logic
 
@@ -68,4 +72,5 @@ Mila listens to live or uploaded conversations, preserves the original multiling
 - Fireflies: broad integrations; heavier workflow and less privacy/local-model positioning
 - Fathom: strong video meeting workflow; limited differentiation for mixed-language teams
 
-Mila's gap to win: multilingual fidelity, privacy/local deployment, configurable notes, and clean apps across web, desktop, and mobile.
+Mila's gap to win: low-latency local desktop capture, multilingual fidelity,
+configurable notes, and on-demand live coaching.

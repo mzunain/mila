@@ -7,3 +7,4 @@ export * from './briefs.js';
 export * from './intelligence.js';
 export * from './live-coach.js';
 export * from './live-assist.js';
+export * from './mentions.js';

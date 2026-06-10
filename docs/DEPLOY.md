@@ -9,7 +9,7 @@ Mila is shipped as four runtime surfaces:
 | ASR worker (`apps/asr-worker`) | Python + faster-whisper | **HuggingFace Spaces** (CPU) |
 | Database | PostgreSQL 16 | **Neon** (free 0.5 GB) |
 | Desktop binaries (`apps/electron`) | Mac/Win/Linux installers | **GitHub Releases** |
-| Mobile apps (`apps/mobile`) | Expo (React Native) | **App Store + Play Store via EAS** |
+| Mobile apps (`apps/mobile`) | Expo (React Native) | Experimental; not part of v0.1 release |
 
 This doc covers Vercel for the web. See `docs/ARCHITECTURE.md` for the rest.
 
@@ -73,7 +73,8 @@ The Space runs `uvicorn main:app --host 0.0.0.0 --port 7860` (default Space port
 
 ## 4. GitHub Releases — desktop binaries
 
-Already handled by `electron-builder` and the GitHub Actions workflow in `.github/workflows/release.yml`.
+Already handled by `electron-builder` and the GitHub Actions workflow in
+`.github/workflows/release-desktop.yml`.
 
 Tag a release:
 
@@ -81,9 +82,11 @@ Tag a release:
 git tag v0.1.0 && git push --tags
 ```
 
-## 5. App Store / Play Store — mobile apps
+## 5. Mobile apps
 
-Mobile builds use Expo Application Services (EAS). See `apps/mobile/README.md`.
+Mobile builds use Expo Application Services (EAS), but the current app is an
+experimental recorder and is not part of the v0.1 supported product surface.
+See `apps/mobile/README.md`.
 
 ```bash
 cd apps/mobile

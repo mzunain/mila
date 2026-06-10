@@ -49,7 +49,8 @@ export class MockAsrProvider implements AsrProvider {
     return Promise.resolve({
       id: randomUUID(),
       sessionId: input.sessionId,
-      speakerId: `speaker-${(input.segmentIndex % 2) + 1}`,
+      speakerId:
+        input.speakerId ?? (input.segmentIndex % 2 === 0 ? 'remote' : 'self'),
       originalText: sample.originalText,
       normalizedText: sample.normalizedText,
       translatedText,

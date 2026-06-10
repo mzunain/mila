@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import {
   buildAssistPrompt,
+  buildQuickAssistSuggestion,
   formatAssistTranscript,
   parseAssistSuggestion,
   shouldRequestAssist,
@@ -88,6 +89,47 @@ describe('formatAssistTranscript', () => {
     const transcript = formatAssistTranscript(turns, { maxTurns: 3 });
     assert.equal(transcript.split('\n').length, 3);
     assert.match(transcript, /line 19$/);
+  });
+});
+
+describe('buildQuickAssistSuggestion', () => {
+  it('summarizes recent turns for catch-up without a model', () => {
+    const suggestion = buildQuickAssistSuggestion(
+      'catch-up',
+      [
+        { speaker: 'them', text: 'We are reviewing the launch checklist.' },
+        { speaker: 'me', text: 'I can take the backend items.' },
+      ],
+      FIXED_NOW,
+    );
+    assert.equal(suggestion?.headline, 'Catch-up');
+    assert.deepEqual(suggestion?.talkingPoints, [
+      'They: We are reviewing the launch checklist.',
+      'You: I can take the backend items.',
+    ]);
+  });
+
+  it('extracts action-like turns', () => {
+    const suggestion = buildQuickAssistSuggestion(
+      'actions',
+      [
+        { speaker: 'them', text: 'Please send the QA checklist today.' },
+        { speaker: 'me', text: 'I will share it after this call.' },
+      ],
+      FIXED_NOW,
+    );
+    assert.equal(suggestion?.headline, 'Actions so far');
+    assert.equal(suggestion?.talkingPoints.length, 2);
+  });
+
+  it('extracts decision-like turns', () => {
+    const suggestion = buildQuickAssistSuggestion(
+      'decisions',
+      [{ speaker: 'them', text: 'We decided to ship the desktop app first.' }],
+      FIXED_NOW,
+    );
+    assert.equal(suggestion?.headline, 'Decisions so far');
+    assert.match(suggestion?.talkingPoints[0] ?? '', /desktop app first/);
   });
 });
 

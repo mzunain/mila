@@ -5,6 +5,12 @@ type FindManyResult = Array<{
   id: string;
   title: string;
   createdAt: Date;
+  segments?: Array<{
+    originalText: string;
+    normalizedText: string;
+    translatedText: string;
+    startMs: number;
+  }>;
   notes: null | {
     summary: string | null;
     keyPoints: unknown;
@@ -28,6 +34,14 @@ const sessionRow = {
     actionItems: [{ text: 'Draft pricing page', owner: 'Ravi' }],
     decisions: ['Move launch to June 30'],
   },
+  segments: [
+    {
+      originalText: 'We need to finish invoicing before launch.',
+      normalizedText: 'We need to finish invoicing before launch.',
+      translatedText: 'We need to finish invoicing before launch.',
+      startMs: 12000,
+    },
+  ],
 };
 
 describe('ChatService', () => {
@@ -91,6 +105,34 @@ describe('ChatService', () => {
     expect(reply.content).toContain('Q3 kickoff');
     expect(reply.content).toContain('invoicing');
     expect(reply.citations?.[0]?.sessionId).toBe('session-1');
+  });
+
+  it('uses transcript keyword matches for citations', async () => {
+    const rows = [
+      {
+        id: 'session-old',
+        title: 'Unrelated retro',
+        createdAt: new Date('2026-04-01T10:00:00Z'),
+        notes: null,
+        segments: [
+          {
+            originalText: 'No launch details here.',
+            normalizedText: 'No launch details here.',
+            translatedText: 'No launch details here.',
+            startMs: 0,
+          },
+        ],
+      },
+      sessionRow,
+    ];
+    const service = new ChatService(buildPrisma(rows));
+
+    const reply = await service.respond('user-1', {
+      messages: [{ role: 'user', content: 'What happened with invoicing?' }],
+    });
+
+    expect(reply.citations?.[0]?.sessionId).toBe('session-1');
+    expect(reply.citations?.[0]?.snippet).toContain('invoicing');
   });
 
   it('calls Gemini with the documented payload shape and returns its content', async () => {

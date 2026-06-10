@@ -3,6 +3,7 @@ import { MeetingNotes } from "./notes.js";
 import type { ActionReviewRisk } from "./intelligence.js";
 import type {
   AssistContext,
+  AssistMode,
   AssistSuggestion,
   AssistTurn,
 } from "./live-assist.js";
@@ -87,6 +88,23 @@ export interface TranscriptSegment {
   isFinal: boolean;
 }
 
+export interface LiveChunkMetrics {
+  chunkId: string;
+  capturedAt?: string;
+  gatewayReceivedAt?: string;
+  processingStartedAt?: string;
+  asrStartedAt?: string;
+  asrFinishedAt?: string;
+  persistedAt?: string;
+  notesFinishedAt?: string;
+  broadcastAt?: string;
+  queueMs?: number;
+  asrMs?: number;
+  persistMs?: number;
+  notesMs?: number;
+  totalMs?: number;
+}
+
 export interface CreateMeetingRequest {
   title?: string;
   outputLanguage?: SupportedLanguageCode;
@@ -114,6 +132,12 @@ export type ClientMeetingEvent =
       chunkId: string;
       capturedAt: string;
       audioBase64?: string;
+      vocabulary?: string[];
+      // Which capture source this chunk came from, so the transcript can label
+      // each segment truthfully instead of fabricating speaker turns: "self" is
+      // this user's microphone, "remote" is everyone heard through the
+      // system-audio loopback. Absent on legacy/mono captures.
+      speakerId?: string;
     }
   | {
       type: "transcript-chunk";
@@ -130,6 +154,14 @@ export type ClientMeetingEvent =
       sessionId: string;
     }
   | {
+      type: "pause";
+      sessionId: string;
+    }
+  | {
+      type: "resume";
+      sessionId: string;
+    }
+  | {
       // Live conversation copilot: ask for "what should I say next" talking
       // points based on the recent turns. Sent over the same authed socket as
       // the meeting stream; the reply is private to the requesting client.
@@ -137,6 +169,7 @@ export type ClientMeetingEvent =
       sessionId: string;
       turns: AssistTurn[];
       context?: AssistContext;
+      mode?: AssistMode;
       /** Cap on talking points; engine clamps to 1..6 (default 4). */
       maxPoints?: number;
       /**
@@ -157,16 +190,21 @@ export type ServerMeetingEvent =
       type: "transcript";
       segment: TranscriptSegment;
       notes: MeetingNotes;
+      metrics?: LiveChunkMetrics;
     }
   | {
       type: "notes";
       notes: MeetingNotes;
+      metrics?: LiveChunkMetrics;
     }
   | {
       type: "status";
       code: string;
       message: string;
       severity: "info" | "warning";
+      sessionId?: string;
+      chunkId?: string;
+      metrics?: LiveChunkMetrics;
     }
   | {
       type: "error";

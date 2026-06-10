@@ -1,7 +1,11 @@
 import { Logger } from '@nestjs/common';
 import { WebSocketGateway } from '@nestjs/websockets';
 import { JwtService } from '@nestjs/jwt';
-import type { ClientMeetingEvent, ServerMeetingEvent } from '@mila/shared';
+import type {
+  ClientMeetingEvent,
+  LiveChunkMetrics,
+  ServerMeetingEvent,
+} from '@mila/shared';
 import { RawData, WebSocket } from 'ws';
 import { MeetingsService } from './meetings.service';
 import { LiveAssistService } from './live-assist.service';
@@ -21,6 +25,7 @@ export class MeetingsGateway {
   private readonly logger = new Logger(MeetingsGateway.name);
   private readonly clientsBySession = new Map<string, Set<AuthedSocket>>();
   private readonly sessionsByClient = new Map<AuthedSocket, Set<string>>();
+  private readonly audioQueuesBySession = new Map<string, Promise<void>>();
 
   constructor(
     private readonly meetingsService: MeetingsService,
@@ -124,38 +129,42 @@ export class MeetingsGateway {
       }
 
       if (event.type === 'audio-chunk') {
-        const result = await this.meetingsService.ingestAudioChunk(
-          userId,
-          event,
-        );
-
-        if (result.segment) {
-          this.broadcast(event.sessionId, {
-            type: 'transcript',
-            segment: result.segment,
-            notes: result.notes,
-          });
-          return;
-        }
-
-        this.broadcast(event.sessionId, {
-          type: 'notes',
-          notes: result.notes,
+        const gatewayReceivedAt = new Date();
+        this.send(client, {
+          type: 'status',
+          code: 'AUDIO_CHUNK_QUEUED',
+          severity: 'info',
+          sessionId: event.sessionId,
+          chunkId: event.chunkId,
+          message: `Audio chunk ${event.chunkId} queued for transcription.`,
+          metrics: {
+            chunkId: event.chunkId,
+            capturedAt: event.capturedAt,
+            gatewayReceivedAt: gatewayReceivedAt.toISOString(),
+          },
         });
+        this.enqueueAudioChunk(client, userId, event, gatewayReceivedAt);
         return;
       }
 
       if (event.type === 'transcript-chunk') {
+        const gatewayReceivedAt = new Date();
         const result = await this.meetingsService.ingestTranscriptChunk(
           userId,
           event,
+          {
+            gatewayReceivedAt,
+            processingStartedAt: gatewayReceivedAt,
+          },
         );
+        const metrics = withBroadcastMetrics(result.metrics);
 
         if (result.segment) {
           this.broadcast(event.sessionId, {
             type: 'transcript',
             segment: result.segment,
             notes: result.notes,
+            metrics,
           });
           return;
         }
@@ -163,6 +172,35 @@ export class MeetingsGateway {
         this.broadcast(event.sessionId, {
           type: 'notes',
           notes: result.notes,
+          metrics,
+        });
+        return;
+      }
+
+      if (event.type === 'pause' || event.type === 'resume') {
+        const detail = await this.meetingsService.getSessionForClient(
+          userId,
+          event.sessionId,
+        );
+
+        if (!detail) {
+          this.send(client, {
+            type: 'error',
+            code: 'SESSION_NOT_FOUND',
+            message: 'Meeting session not found',
+          });
+          return;
+        }
+
+        this.broadcast(event.sessionId, {
+          type: 'status',
+          code: event.type === 'pause' ? 'CAPTURE_PAUSED' : 'CAPTURE_RESUMED',
+          severity: 'info',
+          sessionId: event.sessionId,
+          message:
+            event.type === 'pause'
+              ? 'Live capture paused.'
+              : 'Live capture resumed.',
         });
         return;
       }
@@ -183,6 +221,7 @@ export class MeetingsGateway {
         const outcome = await this.liveAssist.suggest({
           turns: event.turns ?? [],
           context: event.context,
+          mode: event.mode,
           maxPoints: event.maxPoints,
           manual: event.manual === true,
         });
@@ -213,6 +252,64 @@ export class MeetingsGateway {
     }
   }
 
+  private enqueueAudioChunk(
+    client: AuthedSocket,
+    userId: string,
+    event: Extract<ClientMeetingEvent, { type: 'audio-chunk' }>,
+    gatewayReceivedAt: Date,
+  ) {
+    const previous =
+      this.audioQueuesBySession.get(event.sessionId) ?? Promise.resolve();
+    const queued = previous
+      .catch(() => undefined)
+      .then(() =>
+        this.processAudioChunk(client, userId, event, gatewayReceivedAt),
+      );
+    const tracked = queued.finally(() => {
+      if (this.audioQueuesBySession.get(event.sessionId) === tracked) {
+        this.audioQueuesBySession.delete(event.sessionId);
+      }
+    });
+    this.audioQueuesBySession.set(event.sessionId, tracked);
+  }
+
+  private async processAudioChunk(
+    client: AuthedSocket,
+    userId: string,
+    event: Extract<ClientMeetingEvent, { type: 'audio-chunk' }>,
+    gatewayReceivedAt: Date,
+  ) {
+    try {
+      const result = await this.meetingsService.ingestAudioChunk(
+        userId,
+        event,
+        {
+          gatewayReceivedAt,
+          processingStartedAt: new Date(),
+        },
+      );
+      const metrics = withBroadcastMetrics(result.metrics);
+
+      if (result.segment) {
+        this.broadcast(event.sessionId, {
+          type: 'transcript',
+          segment: result.segment,
+          notes: result.notes,
+          metrics,
+        });
+        return;
+      }
+
+      this.broadcast(event.sessionId, {
+        type: 'notes',
+        notes: result.notes,
+        metrics,
+      });
+    } catch (error) {
+      this.handleProcessingError(client, event, error);
+    }
+  }
+
   /**
    * Classify processing errors so the client can react sensibly:
    *   - ASR timeouts on audio chunks are recoverable — drop the chunk,
@@ -233,6 +330,8 @@ export class MeetingsGateway {
         type: 'status',
         code: 'ASR_TIMEOUT',
         severity: 'info',
+        sessionId: event.sessionId,
+        chunkId: error.chunkId,
         message: `Audio chunk ${error.chunkId} timed out and was skipped. The session is still recording.`,
       });
       return;
@@ -246,6 +345,8 @@ export class MeetingsGateway {
         type: 'status',
         code: 'ASR_ERROR',
         severity: 'warning',
+        sessionId: event.sessionId,
+        chunkId: event.chunkId,
         message: `One audio chunk could not be transcribed (${description}). The session is still recording.`,
       });
       return;
@@ -318,6 +419,26 @@ export class MeetingsGateway {
       // ignore: socket may already be closing
     }
   }
+}
+
+function withBroadcastMetrics(
+  metrics: LiveChunkMetrics | undefined,
+): LiveChunkMetrics | undefined {
+  if (!metrics) return undefined;
+  const next = { ...metrics, broadcastAt: new Date().toISOString() };
+  const start = next.capturedAt ?? next.gatewayReceivedAt;
+  next.totalMs = diffMs(start, next.broadcastAt);
+  return next;
+}
+
+function diffMs(start: string | undefined, end: string | undefined) {
+  if (!start || !end) return undefined;
+  const startTime = Date.parse(start);
+  const endTime = Date.parse(end);
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) {
+    return undefined;
+  }
+  return Math.max(0, endTime - startTime);
 }
 
 function extractToken(request?: IncomingRequest): string | null {

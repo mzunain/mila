@@ -178,6 +178,20 @@ describe('NotesEngineService', () => {
     expect(requestBody.model).toBe('gemini-2.5-flash');
   });
 
+  it('keeps live preview notes local even when live LLM notes are enabled', () => {
+    process.env.LLM_PROVIDER = 'openrouter';
+    process.env.OPENROUTER_API_KEY = 'test-key';
+    process.env.LLM_MODEL = 'qwen/qwen3-coder:free';
+    process.env.LLM_LIVE_NOTES_ENABLED = 'true';
+    global.fetch = jest.fn();
+
+    const service = new NotesEngineService();
+    const notes = service.generateLivePreviewNotes([baseSegment], 'en');
+
+    expect(notes.summary).toContain('Live summary');
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
   it('falls back from Google to DeepSeek to xAI as keys/models cascade', async () => {
     process.env.LLM_PROVIDER = 'google';
     process.env.GOOGLE_API_KEY = 'test-google-key';

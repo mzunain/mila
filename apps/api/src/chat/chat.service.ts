@@ -2,6 +2,10 @@ import { Injectable, Logger } from '@nestjs/common';
 import type { ChatMessage, ChatRequest } from '@mila/shared';
 import { randomUUID } from 'node:crypto';
 import { PrismaService } from '../prisma/prisma.service';
+import {
+  embedTextLocally,
+  toPgVectorLiteral,
+} from '../embeddings/local-embedding';
 
 type SessionContext = {
   id: string;
@@ -13,6 +17,12 @@ type SessionContext = {
     actionItems: { text: string; owner?: string | null }[];
     decisions: string[];
   } | null;
+  segments: {
+    originalText: string;
+    normalizedText: string;
+    translatedText: string;
+    startMs: number;
+  }[];
 };
 
 @Injectable()
@@ -27,12 +37,16 @@ export class ChatService {
       .find((message) => message.role === 'user');
     const question = lastUserMessage?.content.trim() ?? '';
 
-    const sessions = await this.relevantSessions(userId, request.sessionIds);
+    const sessions = await this.relevantSessions(
+      userId,
+      request.sessionIds,
+      question,
+    );
 
     const citations = sessions.map((session) => ({
       sessionId: session.id,
       title: session.title,
-      snippet: this.extractSnippet(session.notes?.summary ?? null, question),
+      snippet: this.extractSessionSnippet(session, question),
     }));
 
     const content = await this.generateAnswer(
@@ -146,6 +160,16 @@ export class ChatService {
           parts.push(
             `Decisions:\n${notes.decisions.map((d) => `- ${d}`).join('\n')}`,
           );
+        if (session.segments.length)
+          parts.push(
+            `Transcript excerpts:\n${session.segments
+              .slice(0, 8)
+              .map(
+                (segment) =>
+                  `- [${formatOffset(segment.startMs)}] ${segment.normalizedText}`,
+              )
+              .join('\n')}`,
+          );
         return parts.join('\n');
       })
       .join('\n\n');
@@ -154,16 +178,16 @@ export class ChatService {
   private async relevantSessions(
     userId: string,
     sessionIds?: string[],
+    question = '',
   ): Promise<SessionContext[]> {
+    const explicitScope = Boolean(sessionIds && sessionIds.length > 0);
     const rows = await this.prisma.meetingSession.findMany({
       where: {
         userId,
-        ...(sessionIds && sessionIds.length > 0
-          ? { id: { in: sessionIds } }
-          : {}),
+        ...(explicitScope ? { id: { in: sessionIds } } : {}),
       },
       orderBy: { createdAt: 'desc' },
-      take: sessionIds && sessionIds.length > 0 ? sessionIds.length : 8,
+      take: explicitScope ? sessionIds!.length : 50,
       select: {
         id: true,
         title: true,
@@ -176,9 +200,19 @@ export class ChatService {
             decisions: true,
           },
         },
+        segments: {
+          orderBy: { startMs: 'asc' },
+          take: 80,
+          select: {
+            originalText: true,
+            normalizedText: true,
+            translatedText: true,
+            startMs: true,
+          },
+        },
       },
     });
-    return rows.map((row) => ({
+    const sessions = rows.map((row) => ({
       id: row.id,
       title: row.title,
       createdAt: row.createdAt,
@@ -191,10 +225,77 @@ export class ChatService {
                 text: string;
                 owner?: string | null;
               }[]) ?? [],
-            decisions: (row.notes.decisions as string[]) ?? [],
+            decisions: readDecisionTexts(row.notes.decisions),
           }
         : null,
+      segments: row.segments ?? [],
     }));
+
+    if (explicitScope) {
+      return sessions;
+    }
+
+    const terms = searchTerms(question);
+    if (!terms.length) {
+      return sessions.slice(0, 8);
+    }
+
+    const ranked = sessions
+      .map((session) => ({ session, score: scoreSession(session, terms) }))
+      .filter((item) => item.score > 0)
+      .sort(
+        (a, b) =>
+          b.score - a.score ||
+          b.session.createdAt.getTime() - a.session.createdAt.getTime(),
+      )
+      .map((item) => item.session);
+
+    if (ranked.length) {
+      return ranked.slice(0, 8);
+    }
+
+    const vectorSessionIds = await this.vectorSessionIds(userId, question);
+    if (vectorSessionIds.length) {
+      return this.relevantSessions(userId, vectorSessionIds, '');
+    }
+
+    return sessions.slice(0, 8);
+  }
+
+  private async vectorSessionIds(userId: string, question: string) {
+    const prisma = this.prisma as PrismaService & {
+      $queryRawUnsafe?: <T = unknown>(
+        query: string,
+        ...values: unknown[]
+      ) => Promise<T>;
+    };
+    if (typeof prisma.$queryRawUnsafe !== 'function' || !question.trim()) {
+      return [];
+    }
+
+    try {
+      const embedding = toPgVectorLiteral(embedTextLocally(question));
+      const rows = await prisma.$queryRawUnsafe<Array<{ sessionId: string }>>(
+        `SELECT DISTINCT ms.id::text AS "sessionId",
+                MIN(me.embedding <=> $1::vector) AS distance
+           FROM meeting_embeddings me
+           JOIN meeting_sessions ms ON ms.id = me.session_id
+          WHERE ms.user_id = $2::uuid
+          GROUP BY ms.id
+          ORDER BY distance ASC
+          LIMIT 8`,
+        embedding,
+        userId,
+      );
+      return rows.map((row) => row.sessionId).filter(Boolean);
+    } catch (error) {
+      this.logger.warn(
+        `Vector meeting search failed, falling back to keyword search: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      return [];
+    }
   }
 
   private composeAnswer(question: string, sessions: SessionContext[]): string {
@@ -206,6 +307,15 @@ export class ChatService {
       )
       .join('\n');
     return `Based on your recent meetings, here's what I found about "${question}":\n\n${heads}`;
+  }
+
+  private extractSessionSnippet(session: SessionContext, question: string) {
+    const transcriptMatch = this.extractSnippet(
+      session.segments.map((segment) => segment.normalizedText).join(' '),
+      question,
+    );
+    if (transcriptMatch) return transcriptMatch;
+    return this.extractSnippet(session.notes?.summary ?? null, question);
   }
 
   private extractSnippet(summary: string | null, question: string) {
@@ -224,4 +334,80 @@ export class ChatService {
     if (text.length <= max) return text;
     return `${text.slice(0, max - 1).trimEnd()}…`;
   }
+}
+
+function searchTerms(question: string): string[] {
+  const stopWords = new Set([
+    'about',
+    'after',
+    'again',
+    'anything',
+    'decide',
+    'decided',
+    'does',
+    'from',
+    'have',
+    'meeting',
+    'status',
+    'that',
+    'what',
+    'when',
+    'where',
+    'which',
+    'with',
+  ]);
+  const seen = new Set<string>();
+  return question
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((term) => term.length > 2 && !stopWords.has(term))
+    .filter((term) => {
+      if (seen.has(term)) return false;
+      seen.add(term);
+      return true;
+    })
+    .slice(0, 8);
+}
+
+function scoreSession(session: SessionContext, terms: string[]) {
+  const haystack = [
+    session.title,
+    session.notes?.summary ?? '',
+    ...(session.notes?.keyPoints ?? []),
+    ...(session.notes?.actionItems.map((item) => item.text) ?? []),
+    ...(session.notes?.decisions ?? []),
+    ...session.segments.flatMap((segment) => [
+      segment.originalText,
+      segment.normalizedText,
+      segment.translatedText,
+    ]),
+  ]
+    .join(' ')
+    .toLowerCase();
+
+  return terms.reduce((score, term) => {
+    const occurrences = haystack.split(term).length - 1;
+    return score + occurrences;
+  }, 0);
+}
+
+function readDecisionTexts(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === 'string') return item;
+      if (item && typeof item === 'object' && !Array.isArray(item)) {
+        const text = (item as { text?: unknown }).text;
+        return typeof text === 'string' ? text : null;
+      }
+      return null;
+    })
+    .filter((item): item is string => Boolean(item?.trim()));
+}
+
+function formatOffset(startMs: number) {
+  const totalSeconds = Math.floor(startMs / 1000);
+  const minutes = String(Math.floor(totalSeconds / 60)).padStart(2, '0');
+  const seconds = String(totalSeconds % 60).padStart(2, '0');
+  return `${minutes}:${seconds}`;
 }

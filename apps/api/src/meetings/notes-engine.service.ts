@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
   ActionItem,
+  DecisionItem,
   MeetingNotes,
   SupportedLanguageCode,
   TranscriptSegment,
@@ -44,6 +45,10 @@ export class NotesEngineService {
     false;
   private readonly timeoutMs =
     readNumber(getConfigValue('LLM_TIMEOUT_MS', this.freeClaudeEnv)) ?? 45000;
+  private readonly finalNotesBudgetMs =
+    readNumber(
+      getConfigValue('LLM_FINAL_NOTES_TIMEOUT_MS', this.freeClaudeEnv),
+    ) ?? 30000;
   private readonly transcriptMaxChars =
     readNumber(
       getConfigValue('LLM_TRANSCRIPT_MAX_CHARS', this.freeClaudeEnv),
@@ -66,6 +71,13 @@ export class NotesEngineService {
       (await this.generateLlmNotes('incremental', segments, outputLanguage)) ??
       fallback
     );
+  }
+
+  generateLivePreviewNotes(
+    segments: TranscriptSegment[],
+    outputLanguage: SupportedLanguageCode,
+  ): MeetingNotes {
+    return this.generateHeuristicIncrementalNotes(segments, outputLanguage);
   }
 
   async generateFinalNotes(
@@ -112,13 +124,16 @@ export class NotesEngineService {
       .map((segment) => segment.normalizedText)
       .filter(Boolean);
 
+    const decisionItems = this.extractDecisions(finalSegments);
+
     return {
       summary: normalizedText
         ? `Live summary: ${this.compact(normalizedText, 220)}`
         : 'Listening for the first useful meeting moments.',
       keyPoints,
       actionItems: this.extractActionItems(finalSegments),
-      decisions: this.extractDecisions(finalSegments),
+      decisions: decisionItems.map((item) => item.text),
+      decisionItems,
       outputLanguage,
       updatedAt: new Date().toISOString(),
     };
@@ -153,18 +168,35 @@ export class NotesEngineService {
     }
 
     const transcript = this.formatTranscript(segments);
+    const deadlineMs =
+      Date.now() +
+      (mode === 'final' ? this.finalNotesBudgetMs : this.timeoutMs);
 
     for (const route of this.llmRoutes) {
       try {
-        const payload = await this.callChatCompletions(route, {
-          mode,
-          outputLanguage,
-          transcript,
-        });
+        const remainingBudgetMs =
+          mode === 'final' ? deadlineMs - Date.now() : this.timeoutMs;
+
+        if (remainingBudgetMs <= 0) {
+          this.logger.warn(
+            `LLM ${mode} notes budget expired before trying ${route.label}`,
+          );
+          break;
+        }
+
+        const payload = await this.callChatCompletions(
+          route,
+          {
+            mode,
+            outputLanguage,
+            transcript,
+          },
+          Math.min(this.timeoutMs, remainingBudgetMs),
+        );
         const notes = this.parseLlmNotes(payload, outputLanguage);
 
         if (notes) {
-          return notes;
+          return this.attachAnchors(notes, segments);
         }
       } catch (error) {
         this.logger.warn(
@@ -185,6 +217,7 @@ export class NotesEngineService {
       outputLanguage: SupportedLanguageCode;
       transcript: string;
     },
+    timeoutMs = this.timeoutMs,
   ) {
     return this.callChat(
       route,
@@ -193,7 +226,11 @@ export class NotesEngineService {
           'You are Mila, an AI meeting assistant. Convert multilingual and code-switched meeting transcripts into structured notes. Preserve meaning over literal translation. Return only valid JSON.',
         user: buildNotesPrompt(input),
       },
-      { temperature: 0.2, maxTokens: input.mode === 'final' ? 1400 : 800 },
+      {
+        temperature: 0.2,
+        maxTokens: input.mode === 'final' ? 1400 : 800,
+        timeoutMs,
+      },
     );
   }
 
@@ -209,7 +246,7 @@ export class NotesEngineService {
    */
   async completeChat(
     messages: { system: string; user: string },
-    opts: { temperature?: number; maxTokens?: number } = {},
+    opts: { temperature?: number; maxTokens?: number; timeoutMs?: number } = {},
   ): Promise<string | null> {
     for (const route of this.llmRoutes) {
       try {
@@ -236,7 +273,7 @@ export class NotesEngineService {
   private async callChat(
     route: LlmRoute,
     messages: { system: string; user: string },
-    opts: { temperature?: number; maxTokens?: number } = {},
+    opts: { temperature?: number; maxTokens?: number; timeoutMs?: number } = {},
   ) {
     const response = await fetch(
       `${route.baseUrl.replace(/\/$/, '')}/chat/completions`,
@@ -252,7 +289,7 @@ export class NotesEngineService {
             { role: 'user', content: messages.user },
           ],
         }),
-        signal: AbortSignal.timeout(this.timeoutMs),
+        signal: AbortSignal.timeout(opts.timeoutMs ?? this.timeoutMs),
       },
     );
 
@@ -655,10 +692,12 @@ export class NotesEngineService {
         id: `action-${index + 1}`,
         text: segment.normalizedText,
         status: 'open' as const,
+        sourceSegmentId: segment.id,
+        sourceStartMs: segment.startMs,
       }));
   }
 
-  private extractDecisions(segments: TranscriptSegment[]) {
+  private extractDecisions(segments: TranscriptSegment[]): DecisionItem[] {
     return segments
       .filter((segment) =>
         /decided|decision|approved|go with|we will/i.test(
@@ -666,7 +705,52 @@ export class NotesEngineService {
         ),
       )
       .slice(-5)
-      .map((segment) => segment.normalizedText);
+      .map((segment, index) => ({
+        id: `decision-${index + 1}`,
+        text: segment.normalizedText,
+        sourceSegmentId: segment.id,
+        sourceStartMs: segment.startMs,
+      }));
+  }
+
+  private attachAnchors(
+    notes: MeetingNotes,
+    segments: TranscriptSegment[],
+  ): MeetingNotes {
+    const actionItems = notes.actionItems.map((item, index) => {
+      if (item.sourceSegmentId) return item;
+      const segment = findBestAnchorSegment(item.text, segments);
+      return {
+        ...item,
+        id: item.id || `action-${index + 1}`,
+        sourceSegmentId: segment?.id,
+        sourceStartMs: segment?.startMs,
+      };
+    });
+
+    const baseDecisionItems: DecisionItem[] =
+      notes.decisionItems ??
+      notes.decisions.map((text, index) => ({
+        id: `decision-${index + 1}`,
+        text,
+      }));
+    const decisionItems = baseDecisionItems.map((item, index) => {
+      if (item.sourceSegmentId) return item;
+      const segment = findBestAnchorSegment(item.text, segments);
+      return {
+        ...item,
+        id: item.id || `decision-${index + 1}`,
+        sourceSegmentId: segment?.id,
+        sourceStartMs: segment?.startMs,
+      };
+    });
+
+    return {
+      ...notes,
+      actionItems,
+      decisions: decisionItems.map((item) => item.text),
+      decisionItems,
+    };
   }
 
   private compact(text: string, maxLength: number) {
@@ -799,6 +883,37 @@ function readActionItems(value: unknown): ActionItem[] {
       };
     })
     .filter((item): item is ActionItem => Boolean(item));
+}
+
+function findBestAnchorSegment(
+  text: string,
+  segments: TranscriptSegment[],
+): TranscriptSegment | null {
+  const tokens = tokenizeForAnchor(text);
+  if (!tokens.length) return segments[0] ?? null;
+
+  let best: { segment: TranscriptSegment; score: number } | null = null;
+  for (const segment of segments) {
+    const haystack = tokenizeForAnchor(
+      `${segment.originalText} ${segment.normalizedText} ${segment.translatedText}`,
+    );
+    if (!haystack.length) continue;
+    const haystackSet = new Set(haystack);
+    const score = tokens.filter((token) => haystackSet.has(token)).length;
+    if (!best || score > best.score) {
+      best = { segment, score };
+    }
+  }
+
+  return best?.score ? best.segment : (segments[0] ?? null);
+}
+
+function tokenizeForAnchor(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((token) => token.length > 2)
+    .slice(0, 24);
 }
 
 function extractJsonObject(raw: string) {

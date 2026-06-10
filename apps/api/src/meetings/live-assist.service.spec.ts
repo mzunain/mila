@@ -113,6 +113,25 @@ describe('LiveAssistService', () => {
     expect(completeChat).not.toHaveBeenCalled();
   });
 
+  it('answers quick action prompts without an LLM route', async () => {
+    const engine = new NotesEngineService();
+    jest.spyOn(engine, 'hasLlmRoutes').mockReturnValue(false);
+    const completeChat = jest.spyOn(engine, 'completeChat');
+    const service = new LiveAssistService(engine);
+
+    const outcome = await service.suggest({
+      turns: [
+        { speaker: 'them', text: 'Please send the production checklist.' },
+      ],
+      mode: 'actions',
+      manual: true,
+    });
+
+    expect(outcome.reason).toBe('ok');
+    expect(outcome.suggestion?.headline).toBe('Actions so far');
+    expect(completeChat).not.toHaveBeenCalled();
+  });
+
   it('reports no-suggestion when the model returns nothing usable', async () => {
     const engine = new NotesEngineService();
     jest.spyOn(engine, 'hasLlmRoutes').mockReturnValue(true);

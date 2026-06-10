@@ -6,6 +6,15 @@ export interface ActionItem {
   owner?: string;
   due?: string;
   status: 'open' | 'done';
+  sourceSegmentId?: string;
+  sourceStartMs?: number;
+}
+
+export interface DecisionItem {
+  id: string;
+  text: string;
+  sourceSegmentId?: string;
+  sourceStartMs?: number;
 }
 
 export interface MeetingNotes {
@@ -13,6 +22,7 @@ export interface MeetingNotes {
   keyPoints: string[];
   actionItems: ActionItem[];
   decisions: string[];
+  decisionItems?: DecisionItem[];
   outputLanguage: SupportedLanguageCode;
   updatedAt: string;
 }

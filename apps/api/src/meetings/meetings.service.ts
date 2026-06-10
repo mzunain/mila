@@ -22,7 +22,9 @@ import type {
   MeetingStatus,
   TranscriptSegment,
   ActionItem,
+  DecisionItem,
   ExternalMeetingContext,
+  LiveChunkMetrics,
 } from '@mila/shared';
 import { Prisma } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
@@ -30,6 +32,10 @@ import { PrismaService } from '../prisma/prisma.service';
 import { NotesEngineService } from './notes-engine.service';
 import type { AsrProvider } from './providers/asr-provider';
 import { ASR_PROVIDER } from './providers/asr-provider.token';
+import {
+  embedTextLocally,
+  toPgVectorLiteral,
+} from '../embeddings/local-embedding';
 
 const KNOWN_LANGUAGES = new Set<SupportedLanguageCode>([
   'en',
@@ -47,6 +53,11 @@ const KNOWN_STATUSES = new Set<MeetingStatus>([
   'completed',
   'failed',
 ]);
+
+interface IngestTimingOptions {
+  gatewayReceivedAt?: Date;
+  processingStartedAt?: Date;
+}
 
 @Injectable()
 export class MeetingsService {
@@ -165,51 +176,67 @@ export class MeetingsService {
   async ingestAudioChunk(
     userId: string,
     event: Extract<ClientMeetingEvent, { type: 'audio-chunk' }>,
+    timing: IngestTimingOptions = {},
   ) {
+    const metrics = createChunkMetrics(event, timing);
     const session = await this.loadOwnedSession(userId, event.sessionId);
     if (this.alreadyProcessed(session.id, event.chunkId)) {
       const notes = await this.requireNotes(session.id);
-      return { segment: null, notes };
+      return { segment: null, notes, metrics };
     }
 
     const segmentIndex = await this.prisma.transcriptSegment.count({
       where: { sessionId: session.id },
     });
+    metrics.asrStartedAt = nowIso();
     const segment = await this.asrProvider.transcribe({
       sessionId: event.sessionId,
       chunkId: event.chunkId,
       mimeType: event.mimeType,
       audioBase64: event.audioBase64,
+      vocabulary: event.vocabulary,
       outputLanguage: this.parseLanguage(session.outputLanguage),
       segmentIndex,
+      speakerId: event.speakerId,
     });
+    metrics.asrFinishedAt = nowIso();
+    metrics.asrMs = diffMs(metrics.asrStartedAt, metrics.asrFinishedAt);
 
     this.rememberChunk(session.id, event.chunkId);
 
     if (!segment) {
       const notes = await this.requireNotes(session.id);
-      return { segment: null, notes };
+      return { segment: null, notes, metrics };
     }
 
+    const persistStartedAt = nowIso();
     await this.persistSegment(session.id, segment);
+    await this.persistSegmentEmbedding(session.id, segment);
+    metrics.persistedAt = nowIso();
+    metrics.persistMs = diffMs(persistStartedAt, metrics.persistedAt);
+    const notesStartedAt = nowIso();
     const notes = await this.regenerateIncrementalNotes(session.id);
-    return { segment, notes };
+    metrics.notesFinishedAt = nowIso();
+    metrics.notesMs = diffMs(notesStartedAt, metrics.notesFinishedAt);
+    return { segment, notes, metrics };
   }
 
   async ingestTranscriptChunk(
     userId: string,
     event: Extract<ClientMeetingEvent, { type: 'transcript-chunk' }>,
+    timing: IngestTimingOptions = {},
   ) {
+    const metrics = createChunkMetrics(event, timing);
     const session = await this.loadOwnedSession(userId, event.sessionId);
     if (this.alreadyProcessed(session.id, event.chunkId)) {
       const notes = await this.requireNotes(session.id);
-      return { segment: null, notes };
+      return { segment: null, notes, metrics };
     }
 
     const originalText = event.text.trim();
     if (!originalText) {
       const notes = await this.requireNotes(session.id);
-      return { segment: null, notes };
+      return { segment: null, notes, metrics };
     }
 
     this.rememberChunk(session.id, event.chunkId);
@@ -225,7 +252,8 @@ export class MeetingsService {
     const segment: TranscriptSegment = {
       id: randomUUID(),
       sessionId: session.id,
-      speakerId: event.speakerId ?? `speaker-${(segmentIndex % 2) + 1}`,
+      speakerId:
+        event.speakerId ?? (segmentIndex % 2 === 0 ? 'remote' : 'self'),
       originalText,
       normalizedText: originalText,
       translatedText: this.translateTranscriptText(
@@ -240,9 +268,16 @@ export class MeetingsService {
       isFinal: event.isFinal ?? true,
     };
 
+    const persistStartedAt = nowIso();
     await this.persistSegment(session.id, segment);
+    await this.persistSegmentEmbedding(session.id, segment);
+    metrics.persistedAt = nowIso();
+    metrics.persistMs = diffMs(persistStartedAt, metrics.persistedAt);
+    const notesStartedAt = nowIso();
     const notes = await this.regenerateIncrementalNotes(session.id);
-    return { segment, notes };
+    metrics.notesFinishedAt = nowIso();
+    metrics.notesMs = diffMs(notesStartedAt, metrics.notesFinishedAt);
+    return { segment, notes, metrics };
   }
 
   async completeSession(userId: string, sessionId: string) {
@@ -305,6 +340,41 @@ export class MeetingsService {
     });
   }
 
+  private async persistSegmentEmbedding(
+    sessionId: string,
+    segment: TranscriptSegment,
+  ) {
+    const prisma = this.prisma as PrismaService & {
+      $executeRawUnsafe?: (
+        query: string,
+        ...values: unknown[]
+      ) => Promise<unknown>;
+    };
+    if (typeof prisma.$executeRawUnsafe !== 'function') {
+      return;
+    }
+
+    const content = [
+      segment.originalText,
+      segment.normalizedText,
+      segment.translatedText,
+    ]
+      .filter(Boolean)
+      .join('\n');
+    const embedding = toPgVectorLiteral(embedTextLocally(content));
+
+    await prisma.$executeRawUnsafe(
+      `INSERT INTO meeting_embeddings (id, session_id, segment_id, kind, content, embedding)
+       VALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::vector)`,
+      randomUUID(),
+      sessionId,
+      segment.id,
+      'segment',
+      content,
+      embedding,
+    );
+  }
+
   private async regenerateIncrementalNotes(
     sessionId: string,
   ): Promise<MeetingNotes> {
@@ -314,10 +384,7 @@ export class MeetingsService {
     });
     const language = this.parseLanguage(session.outputLanguage);
     const segments = session.segments.map((s) => this.toSegment(s));
-    const next = await this.notesEngine.generateIncrementalNotes(
-      segments,
-      language,
-    );
+    const next = this.notesEngine.generateLivePreviewNotes(segments, language);
     return this.upsertNotes(sessionId, next);
   }
 
@@ -342,7 +409,9 @@ export class MeetingsService {
         summary: notes.summary,
         keyPoints: notes.keyPoints,
         actionItems: notes.actionItems as unknown as Prisma.InputJsonValue,
-        decisions: notes.decisions,
+        decisions: serializeDecisions(
+          notes,
+        ) as unknown as Prisma.InputJsonValue,
         outputLanguage: notes.outputLanguage,
         version: { increment: 1 },
       },
@@ -351,7 +420,9 @@ export class MeetingsService {
         summary: notes.summary,
         keyPoints: notes.keyPoints,
         actionItems: notes.actionItems as unknown as Prisma.InputJsonValue,
-        decisions: notes.decisions,
+        decisions: serializeDecisions(
+          notes,
+        ) as unknown as Prisma.InputJsonValue,
         outputLanguage: notes.outputLanguage,
       },
     });
@@ -543,6 +614,7 @@ export class MeetingsService {
     outputLanguage: string;
     updatedAt: Date;
   }): MeetingNotes {
+    const decisionItems = parseDecisionItems(row.decisions);
     return {
       summary: row.summary,
       keyPoints: Array.isArray(row.keyPoints)
@@ -551,11 +623,85 @@ export class MeetingsService {
       actionItems: Array.isArray(row.actionItems)
         ? (row.actionItems as unknown as ActionItem[])
         : [],
-      decisions: Array.isArray(row.decisions)
-        ? (row.decisions as string[])
-        : [],
+      decisions: decisionItems.map((item) => item.text),
+      decisionItems,
       outputLanguage: this.parseLanguage(row.outputLanguage),
       updatedAt: row.updatedAt.toISOString(),
     };
   }
+}
+
+function serializeDecisions(notes: MeetingNotes): DecisionItem[] | string[] {
+  if (notes.decisionItems?.length) {
+    return notes.decisionItems;
+  }
+  return notes.decisions;
+}
+
+function parseDecisionItems(value: Prisma.JsonValue): DecisionItem[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item, index) => {
+      if (typeof item === 'string') {
+        return {
+          id: `decision-${index + 1}`,
+          text: item,
+        };
+      }
+      if (!item || typeof item !== 'object' || Array.isArray(item)) {
+        return null;
+      }
+      const text = readDecisionText(item.text);
+      if (!text) return null;
+      return {
+        id: readDecisionText(item.id) ?? `decision-${index + 1}`,
+        text,
+        sourceSegmentId: readDecisionText(item.sourceSegmentId) ?? undefined,
+        sourceStartMs:
+          typeof item.sourceStartMs === 'number'
+            ? item.sourceStartMs
+            : undefined,
+      };
+    })
+    .filter((item): item is DecisionItem => Boolean(item));
+}
+
+function readDecisionText(value: unknown): string | null {
+  return typeof value === 'string' && value.trim() ? value.trim() : null;
+}
+
+function createChunkMetrics(
+  event: Extract<
+    ClientMeetingEvent,
+    { type: 'audio-chunk' | 'transcript-chunk' }
+  >,
+  timing: IngestTimingOptions,
+): LiveChunkMetrics {
+  const gatewayReceivedAt = timing.gatewayReceivedAt ?? new Date();
+  const processingStartedAt = timing.processingStartedAt ?? gatewayReceivedAt;
+  const metrics: LiveChunkMetrics = {
+    chunkId: event.chunkId,
+    capturedAt: event.capturedAt,
+    gatewayReceivedAt: gatewayReceivedAt.toISOString(),
+    processingStartedAt: processingStartedAt.toISOString(),
+  };
+  metrics.queueMs = diffMs(
+    metrics.gatewayReceivedAt,
+    metrics.processingStartedAt,
+  );
+  return metrics;
+}
+
+function nowIso() {
+  return new Date().toISOString();
+}
+
+function diffMs(start: string | undefined, end: string | undefined) {
+  if (!start || !end) return undefined;
+  const startTime = Date.parse(start);
+  const endTime = Date.parse(end);
+  if (!Number.isFinite(startTime) || !Number.isFinite(endTime)) {
+    return undefined;
+  }
+  return Math.max(0, endTime - startTime);
 }

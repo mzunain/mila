@@ -122,7 +122,7 @@ describe('HttpAsrProvider', () => {
     expect((caught as AsrTimeoutError).chunkId).toBe('chunk-abort');
   });
 
-  it('falls back to the default 30s timeout when ASR_TIMEOUT_MS is unset', async () => {
+  it('falls back to the default 15s timeout when ASR_TIMEOUT_MS is unset', async () => {
     process.env.ASR_BASE_URL = 'http://asr.test';
     delete process.env.ASR_TIMEOUT_MS;
     const fetchMock = jest.fn().mockImplementation(() => {
@@ -145,7 +145,7 @@ describe('HttpAsrProvider', () => {
       }),
     ).rejects.toMatchObject({
       name: 'AsrTimeoutError',
-      timeoutMs: 30_000,
+      timeoutMs: 15_000,
     });
   });
 
@@ -172,7 +172,7 @@ describe('HttpAsrProvider', () => {
       }),
     ).rejects.toMatchObject({
       name: 'AsrTimeoutError',
-      timeoutMs: 30_000,
+      timeoutMs: 15_000,
     });
   });
 

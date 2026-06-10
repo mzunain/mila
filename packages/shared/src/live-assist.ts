@@ -8,6 +8,7 @@
 // runs unchanged under `node --test`.
 
 export type AssistSpeaker = 'me' | 'them';
+export type AssistMode = 'reply' | 'catch-up' | 'actions' | 'decisions';
 
 export interface AssistTurn {
   speaker: AssistSpeaker;
@@ -86,6 +87,11 @@ const HANDOFF_PATTERNS = [
   /\b(explain|describe) (how|why|your|the)\b/i,
 ];
 
+const ACTION_PATTERN =
+  /\b(action|follow up|send|share|prepare|schedule|review|todo|to do|need to|please|will|assign|owner)\b/i;
+const DECISION_PATTERN =
+  /\b(decided|decision|approved|agreed|settled|go with|we will|we are going to|chosen|greenlit)\b/i;
+
 /**
  * Decide whether the tail of the conversation is worth asking the model to
  * respond to. Fires only when the latest meaningful turn is from "them" (so
@@ -117,6 +123,64 @@ export function shouldRequestAssist(
     return { reason: 'turn-complete', prompt: text };
   }
   return null;
+}
+
+export function buildQuickAssistSuggestion(
+  mode: Exclude<AssistMode, 'reply'>,
+  turns: AssistTurn[],
+  now: Date = new Date(),
+): AssistSuggestion | null {
+  const recent = turns
+    .map((turn) => ({ speaker: turn.speaker, text: normalize(turn.text) }))
+    .filter((turn): turn is { speaker: AssistSpeaker; text: string } =>
+      Boolean(turn.text),
+    )
+    .slice(-12);
+
+  if (!recent.length) return null;
+
+  if (mode === 'catch-up') {
+    return {
+      headline: 'Catch-up',
+      talkingPoints: recent.slice(-5).map((turn) => {
+        const speaker = turn.speaker === 'me' ? 'You' : 'They';
+        return `${speaker}: ${truncate(turn.text, 140)}`;
+      }),
+      followUps: [],
+      confidence: 'medium',
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  const matches = recent.filter((turn) =>
+    mode === 'actions'
+      ? ACTION_PATTERN.test(turn.text)
+      : DECISION_PATTERN.test(turn.text),
+  );
+
+  if (!matches.length) {
+    return {
+      headline: mode === 'actions' ? 'No clear actions yet' : 'No decisions yet',
+      talkingPoints: [
+        mode === 'actions'
+          ? 'No explicit owner, task, or follow-up has been captured yet.'
+          : 'No explicit decision has been captured yet.',
+      ],
+      followUps: [],
+      confidence: 'low',
+      generatedAt: now.toISOString(),
+    };
+  }
+
+  return {
+    headline: mode === 'actions' ? 'Actions so far' : 'Decisions so far',
+    talkingPoints: uniqueStrings(
+      matches.map((turn) => truncate(turn.text, 160)),
+    ).slice(0, 6),
+    followUps: [],
+    confidence: 'medium',
+    generatedAt: now.toISOString(),
+  };
 }
 
 /** Render turns as "Me: …" / "Them: …" lines, recency-capped and char-budgeted. */
@@ -243,6 +307,18 @@ function readStringList(value: unknown): string[] {
 function readConfidence(value: unknown): AssistConfidence {
   if (value === 'high' || value === 'medium' || value === 'low') return value;
   return 'medium';
+}
+
+function uniqueStrings(values: string[]): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const value of values) {
+    const key = value.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(value);
+  }
+  return result;
 }
 
 function extractJsonObject(raw: string): string | null {

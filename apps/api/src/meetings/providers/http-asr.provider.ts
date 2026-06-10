@@ -33,13 +33,11 @@ export class AsrTimeoutError extends Error {
 }
 
 /**
- * Default per-chunk transcription budget. faster-whisper "base" on CPU
- * processes a 5-second chunk in a couple of seconds on a typical laptop;
- * `small` can take 5–15s; `medium`+ is too slow for live audio. 30s gives
- * headroom for the smaller models without letting a stuck worker hold the
- * gateway hostage for undici's 5-minute default.
+ * Default per-chunk transcription budget. Live chunks are intentionally short;
+ * if one takes longer than this, keeping the session responsive is better than
+ * letting a stuck worker hold the gateway hostage for undici's 5-minute default.
  */
-const DEFAULT_ASR_TIMEOUT_MS = 30_000;
+const DEFAULT_ASR_TIMEOUT_MS = 15_000;
 
 @Injectable()
 export class HttpAsrProvider implements AsrProvider {
@@ -70,6 +68,7 @@ export class HttpAsrProvider implements AsrProvider {
           chunkId: input.chunkId,
           mimeType: input.mimeType,
           audioBase64: input.audioBase64,
+          vocabulary: input.vocabulary,
           outputLanguage: input.outputLanguage,
           segmentIndex: input.segmentIndex,
         }),
@@ -107,7 +106,7 @@ export class HttpAsrProvider implements AsrProvider {
     return {
       id: randomUUID(),
       sessionId: input.sessionId,
-      speakerId: result.speakerId ?? `speaker-${(input.segmentIndex % 2) + 1}`,
+      speakerId: input.speakerId ?? result.speakerId,
       originalText,
       normalizedText,
       translatedText,

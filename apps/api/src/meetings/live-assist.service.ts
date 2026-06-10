@@ -1,9 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import {
   buildAssistPrompt,
+  buildQuickAssistSuggestion,
   parseAssistSuggestion,
   shouldRequestAssist,
   type AssistContext,
+  type AssistMode,
   type AssistSuggestion,
   type AssistTurn,
 } from '@mila/shared';
@@ -12,6 +14,7 @@ import { NotesEngineService } from './notes-engine.service';
 export interface AssistRequest {
   turns: AssistTurn[];
   context?: AssistContext;
+  mode?: AssistMode;
   maxPoints?: number;
   /** Explicit user ask (e.g. a hotkey): skip the "is the tail worth answering" gate. */
   manual?: boolean;
@@ -56,6 +59,14 @@ export class LiveAssistService {
    */
   async suggest(request: AssistRequest): Promise<AssistOutcome> {
     const turns = request.turns ?? [];
+    const mode = request.mode ?? 'reply';
+
+    if (mode !== 'reply') {
+      const suggestion = buildQuickAssistSuggestion(mode, turns);
+      return suggestion
+        ? { suggestion, reason: 'ok' }
+        : { suggestion: null, reason: 'no-suggestion' };
+    }
 
     if (!request.manual && !shouldRequestAssist(turns)) {
       return { suggestion: null, reason: 'not-triggered' };

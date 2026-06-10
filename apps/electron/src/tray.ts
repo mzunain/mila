@@ -40,6 +40,10 @@ let activeDetectedCall: {
   meeting: DetectedMeeting;
   actions: DetectedCallTrayActions;
 } | null = null;
+// Live transcription state pushed from the renderer. When active we paint an
+// unmistakable "🔴 REC" badge in the menu bar — visible even while Mila's window
+// is hidden behind the call — which is the whole point of the indicator.
+let recordingState: { active: boolean; title?: string } = { active: false };
 
 const SCHEDULE_REFRESH_MS = 60 * 1000;
 const TRAY_CLOCK_REFRESH_MS = 30 * 1000;
@@ -171,6 +175,21 @@ export function refreshTrayForPreferences() {
   void refreshScheduledCalls(() => rebuildTrayMenu?.());
 }
 
+// Called over IPC whenever the renderer starts/stops a live transcription (it
+// has already folded in the "Live meeting indicator" preference, so an inactive
+// state here means either not recording or the user opted the badge off). Only
+// the title + tooltip change, so we repaint those rather than rebuild the menu.
+export function setRecordingState(state: { active: boolean; title?: string }) {
+  if (
+    recordingState.active === state.active &&
+    recordingState.title === state.title
+  ) {
+    return;
+  }
+  recordingState = { active: state.active, title: state.title };
+  updateTrayTitle();
+}
+
 export function showDetectedCallInTray(
   meeting: DetectedMeeting,
   actions: DetectedCallTrayActions,
@@ -285,7 +304,27 @@ function buildScheduledCallItems(
 }
 
 function updateTrayTitle() {
-  if (!tray || process.platform !== 'darwin') return;
+  if (!tray) return;
+
+  // Tooltip reflects recording on every platform — Windows/Linux have no
+  // menu-bar title, so this is their only badge surface.
+  tray.setToolTip(
+    recordingState.active
+      ? recordingState.title
+        ? `Mila — Recording · ${recordingState.title}`
+        : 'Mila — Recording'
+      : 'Mila — Meeting notes',
+  );
+
+  if (process.platform !== 'darwin') return;
+
+  // Recording wins the menu-bar slot: an always-visible red badge beats any
+  // scheduled-call countdown while a call is actually being transcribed.
+  if (recordingState.active) {
+    tray.setTitle(' 🔴 REC');
+    return;
+  }
+
   const now = new Date();
   const inProgressCall = scheduledCalls.find((call) =>
     isCallInProgress(call, now),

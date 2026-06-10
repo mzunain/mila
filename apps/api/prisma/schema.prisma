@@ -41,8 +41,10 @@ model MeetingSession {
   user     User                @relation(fields: [userId], references: [id], onDelete: Cascade)
   segments TranscriptSegment[]
   notes    MeetingNotes?
+  embeddings MeetingEmbedding[]
 
   @@index([userId, createdAt(sort: Desc)], map: "meeting_sessions_user_created_idx")
+  @@index([userId, title], map: "meeting_sessions_user_title_idx")
   @@map("meeting_sessions")
 }
 
@@ -62,9 +64,27 @@ model TranscriptSegment {
   createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   session MeetingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  embeddings MeetingEmbedding[]
 
   @@index([sessionId, startMs], map: "transcript_segments_session_time_idx")
   @@map("transcript_segments")
+}
+
+model MeetingEmbedding {
+  id        String                 @id @default(uuid()) @db.Uuid
+  sessionId String                 @map("session_id") @db.Uuid
+  segmentId String?                @map("segment_id") @db.Uuid
+  kind      String
+  content   String
+  embedding Unsupported("vector(64)") @map("embedding")
+  createdAt DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  session MeetingSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  segment TranscriptSegment? @relation(fields: [segmentId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId], map: "meeting_embeddings_session_idx")
+  @@index([segmentId], map: "meeting_embeddings_segment_idx")
+  @@map("meeting_embeddings")
 }
 
 model MeetingNotes {

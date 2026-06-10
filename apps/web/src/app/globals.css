@@ -180,3 +180,20 @@ input {
   background: var(--selection-bg);
   color: var(--selection-fg);
 }
+
+/* Brief ring pulse drawn on a transcript row when the user jumps to a mention
+   (from the catch-up list or an OS notification), so the moment their name came
+   up is unmistakable on arrival. */
+@keyframes mila-mention-flash {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  15% {
+    box-shadow: 0 0 0 3px var(--accent);
+  }
+}
+
+.mila-mention-flash {
+  animation: mila-mention-flash 1.6s ease-out;
+}

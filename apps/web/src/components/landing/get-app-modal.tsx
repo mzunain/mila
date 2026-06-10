@@ -1,7 +1,7 @@
 "use client";
 
-import { Apple, Check, Download, Mail, Monitor, QrCode, Smartphone, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { Apple, Check, Download, Monitor, Smartphone, X } from "lucide-react";
+import { useEffect } from "react";
 
 export type Platform = "mac" | "windows" | "ios" | "android";
 
@@ -10,20 +10,23 @@ interface GetAppModalProps {
   onClose: () => void;
 }
 
-const DOWNLOAD_LINKS: Record<Platform, { primary: string; secondary?: string }> = {
+const DOWNLOAD_LINKS: Record<
+  Platform,
+  { primary: string; secondary?: string; primaryLabel?: string }
+> = {
   mac: {
-    primary: "https://github.com/mzunain/mila/releases/latest/download/Mila.dmg",
-    secondary: "https://github.com/mzunain/mila/releases/latest",
+    primary: "https://github.com/mzunain/mila/releases/latest",
+    primaryLabel: "Open macOS downloads",
   },
   windows: {
-    primary: "https://github.com/mzunain/mila/releases/latest/download/Mila-Setup.exe",
-    secondary: "https://github.com/mzunain/mila/releases/latest",
+    primary: "https://github.com/mzunain/mila/releases/latest",
+    primaryLabel: "Open Windows downloads",
   },
   ios: {
-    primary: "https://apps.apple.com/app/mila-meeting-notes",
+    primary: "https://github.com/mzunain/mila/releases/latest",
   },
   android: {
-    primary: "https://play.google.com/store/apps/details?id=app.mila.android",
+    primary: "https://github.com/mzunain/mila/releases/latest",
   },
 };
 
@@ -85,24 +88,29 @@ function DesktopContent({ platform }: { platform: "mac" | "windows" }) {
   const label = platform === "mac" ? "macOS" : "Windows";
   const fileNote =
     platform === "mac"
-      ? "Universal .dmg — works on Apple silicon & Intel"
-      : ".exe installer — Windows 10 and 11";
+      ? "Choose the Apple silicon or Intel .dmg from the latest release"
+      : "Windows builds will appear on the latest release when available";
   const links = DOWNLOAD_LINKS[platform];
+  const primaryLabel = links.primaryLabel ?? "Download Mila";
 
   return (
     <div className="p-7">
       <div className="grid h-14 w-14 place-items-center rounded-md bg-[#e6f8fb] text-[#0e7490]">
         <Icon size={22} />
       </div>
-      <h2 className="mt-5 text-xl font-semibold text-[#151411]">Get Mila for {label}</h2>
+      <h2 className="mt-5 text-xl font-semibold text-[#151411]">
+        Get Mila for {label}
+      </h2>
       <p className="mt-2 text-sm text-[#625f59]">{fileNote}</p>
 
       <a
         href={links.primary}
+        target="_blank"
+        rel="noreferrer noopener"
         className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#0e7490] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#155e75]"
       >
         <Download size={15} />
-        Download Mila
+        {primaryLabel}
       </a>
 
       {links.secondary && (
@@ -136,119 +144,30 @@ function DesktopContent({ platform }: { platform: "mac" | "windows" }) {
 
 function MobileContent({ platform }: { platform: "ios" | "android" }) {
   const label = platform === "ios" ? "iPhone" : "Android";
-  const store = platform === "ios" ? "App Store" : "Play Store";
   const link = DOWNLOAD_LINKS[platform].primary;
-  const [tab, setTab] = useState<"qr" | "email">("qr");
-  const [email, setEmail] = useState("");
-  const [emailed, setEmailed] = useState(false);
 
   return (
     <div className="p-7">
       <div className="grid h-14 w-14 place-items-center rounded-md bg-[#e6f8fb] text-[#0e7490]">
         <Smartphone size={22} />
       </div>
-      <h2 className="mt-5 text-xl font-semibold text-[#151411]">Get Mila for {label}</h2>
+      <h2 className="mt-5 text-xl font-semibold text-[#151411]">
+        Get Mila for {label}
+      </h2>
       <p className="mt-2 text-sm text-[#625f59]">
-        Scan the QR code, or send yourself a one-tap link.
+        Mobile apps are not published yet. Use the desktop build or local web
+        app while mobile packaging is in progress.
       </p>
-
-      <div className="mt-5 grid grid-cols-2 gap-1 rounded-lg border border-[#e2ded6] bg-white p-1">
-        <button
-          type="button"
-          onClick={() => setTab("qr")}
-          className={
-            tab === "qr"
-              ? "flex items-center justify-center gap-1.5 rounded-md bg-[#e6f8fb] px-3 py-1.5 text-xs font-medium text-[#0e7490]"
-              : "flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-[#625f59] transition hover:text-[#151411]"
-          }
-        >
-          <QrCode size={12} /> QR code
-        </button>
-        <button
-          type="button"
-          onClick={() => setTab("email")}
-          className={
-            tab === "email"
-              ? "flex items-center justify-center gap-1.5 rounded-md bg-[#e6f8fb] px-3 py-1.5 text-xs font-medium text-[#0e7490]"
-              : "flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium text-[#625f59] transition hover:text-[#151411]"
-          }
-        >
-          <Mail size={12} /> Email me a link
-        </button>
-      </div>
-
-      {tab === "qr" ? (
-        <div className="mt-5 grid place-items-center rounded-lg border border-[#e2ded6] bg-white px-6 py-8">
-          <QrPlaceholder link={link} />
-          <p className="mt-4 max-w-[16rem] text-center text-xs text-[#625f59]">
-            Open your camera and point it at the code to install from the {store}.
-          </p>
-        </div>
-      ) : (
-        <form
-          className="mt-5 space-y-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (!email) return;
-            setEmailed(true);
-          }}
-        >
-          <input
-            type="email"
-            required
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            placeholder="you@example.com"
-            className="w-full rounded-md border border-[#c8d7d9] bg-white px-3 py-2.5 text-sm text-[#151411] outline-none focus:border-[#0e7490]"
-          />
-          <button
-            type="submit"
-            className="inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#0e7490] px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-[#155e75]"
-          >
-            <Mail size={14} />
-            {emailed ? "Sent — check your inbox" : "Send me the install link"}
-          </button>
-          <p className="text-center text-xs text-[#72777d]">
-            We&apos;ll send one link, then forget your email.
-          </p>
-        </form>
-      )}
 
       <a
         href={link}
         target="_blank"
         rel="noreferrer noopener"
-        className="mt-5 block text-center text-xs text-[#625f59] transition hover:text-[#0e7490]"
+        className="mt-6 inline-flex w-full items-center justify-center gap-2 rounded-md bg-[#0e7490] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[#155e75]"
       >
-        Open the {store} →
+        <Download size={15} />
+        Open desktop releases
       </a>
-    </div>
-  );
-}
-
-function QrPlaceholder({ link }: { link: string }) {
-  // simple deterministic ASCII-style QR placeholder — visual filler until
-  // a real QR generator (qrcode lib) is wired up
-  const seed = Array.from(link).reduce((acc, ch) => acc + ch.charCodeAt(0), 0);
-  const cells = Array.from({ length: 25 * 25 }, (_, index) => {
-    const x = index % 25;
-    const y = Math.floor(index / 25);
-    const isCorner =
-      (x < 7 && y < 7) || (x > 17 && y < 7) || (x < 7 && y > 17);
-    const cornerOuter =
-      isCorner && (x === 0 || x === 6 || x === 18 || x === 24 || y === 0 || y === 6 || y === 18 || y === 24);
-    const cornerInner =
-      isCorner && x >= 2 && x <= 4 && (y >= 2 && y <= 4);
-    if (isCorner) {
-      return cornerOuter || cornerInner;
-    }
-    return ((x * 31 + y * 17 + seed) % 7) % 2 === 0;
-  });
-  return (
-    <div className="grid h-44 w-44 grid-cols-25 rounded-md bg-white p-2 shadow-inner" style={{ gridTemplateColumns: "repeat(25, 1fr)" }}>
-      {cells.map((on, i) => (
-        <div key={i} className={on ? "bg-slate-900" : "bg-white"} />
-      ))}
     </div>
   );
 }

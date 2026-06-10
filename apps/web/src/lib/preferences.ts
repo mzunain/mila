@@ -24,6 +24,13 @@ export interface Preferences {
   internalJargon: string;
   scheduledMeetingNotifications: boolean;
   autoDetectedMeetingNotifications: boolean;
+  // Fire an alert (in-app banner when MILA is focused, OS notification when it
+  // is backgrounded) the moment someone says your name in a live meeting.
+  mentionAlerts: boolean;
+  // Extra names/nicknames to listen for, beyond your account name. Comma- or
+  // newline-separated. Useful because ASR mangles proper nouns — adding the
+  // way your name is usually misheard (or short forms) widens the net.
+  mentionAliases: string;
   mutedMeetingApps: string[];
   marketingEmails: boolean;
   showUpcomingInMenuBar: boolean;
@@ -52,6 +59,8 @@ export const defaultPreferences: Preferences = {
   internalJargon: "",
   scheduledMeetingNotifications: true,
   autoDetectedMeetingNotifications: true,
+  mentionAlerts: true,
+  mentionAliases: "",
   mutedMeetingApps: [],
   marketingEmails: true,
   showUpcomingInMenuBar: true,

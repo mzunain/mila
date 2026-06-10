@@ -50,6 +50,8 @@ services:
       WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
       WHISPER_BEAM_SIZE: ${WHISPER_BEAM_SIZE:-1}
       WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-4}
+      WHISPER_PRELOAD: ${WHISPER_PRELOAD:-true}
+      WHISPER_VAD_FILTER: ${WHISPER_VAD_FILTER:-false}
 
   api:
     build:
@@ -83,10 +85,10 @@ services:
       # falling back to simulated "mock" transcripts if .env drifts or is absent.
       ASR_PROVIDER: http
       ASR_BASE_URL: http://asr-worker:9000
-      # Headroom over the worker's per-chunk time. With `tiny` each chunk lands
-      # in a few seconds; this only guards the occasional dense/long chunk, while
-      # still abandoning a genuinely stuck worker instead of hanging the session.
-      ASR_TIMEOUT_MS: ${ASR_TIMEOUT_MS:-45000}
+      # Headroom over the worker's per-chunk time. With `tiny` each live chunk
+      # should land in a few seconds; abandon genuinely stuck chunks instead of
+      # making the transcript feel 30-40 seconds late.
+      ASR_TIMEOUT_MS: ${ASR_TIMEOUT_MS:-15000}
 
 volumes:
   mila-postgres:

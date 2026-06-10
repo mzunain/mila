@@ -5,3 +5,9 @@ services:
   redis:
     ports: !override
       - "16379:6379"
+  asr-worker:
+    # Host :9000 is frequently taken by other local projects, so expose the
+    # worker on 9001 for host dev. The containerised API still reaches it at
+    # asr-worker:9000 over the compose network — this only affects host mode.
+    ports: !override
+      - "9001:9000"

@@ -2,6 +2,7 @@
 
 import {
   ActionItem,
+  AssistMode,
   AssistSuggestion,
   AssistTurn,
   CreateMeetingRequest,
@@ -14,24 +15,29 @@ import {
   MeetingSession,
   MeetingSource,
   ServerMeetingEvent,
+  SelfIdentity,
   SupportedLanguageCode,
   TranscriptSegment,
   LiveCoachCard as LiveCoachCardModel,
   LiveMeetingCoach,
+  buildAliasTokens,
   buildLiveMeetingCoach,
   buildMeetingActionReview,
   createEmptyNotes,
+  detectMention,
   getLanguage,
   supportedLanguages,
 } from "@mila/shared";
 import {
   AlertCircle,
   ArrowUpRight,
+  AtSign,
   BrainCircuit,
   CalendarClock,
   Clipboard,
   Captions,
   CheckCircle2,
+  ChevronDown,
   Command,
   FileAudio,
   FileDown,
@@ -47,12 +53,14 @@ import {
   RefreshCw,
   Search,
   ShieldAlert,
+  Pencil,
   Sparkles,
   Square,
   ToggleLeft,
   ToggleRight,
   Upload,
   UsersRound,
+  Volume2,
   X,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -94,6 +102,26 @@ interface WorkspaceNotice {
   tone: NoticeTone;
   title: string;
   message: string;
+}
+
+// A moment in the live transcript where a participant said the user's name (or
+// an alias). Detected client-side from the streamed segments — there is no DB
+// concept of a mention — and used to drive alerts, the transcript highlight,
+// and the "while you were away" catch-up list.
+interface MentionRecord {
+  segmentId: string;
+  // When the mention was detected (ms epoch), for ordering live arrivals.
+  at: number;
+  // Position within the meeting, for the transcript jump + "HH:MM" label.
+  startMs: number;
+  speaker: string;
+  text: string;
+  matchedAlias: string;
+  evidence: string;
+  confidence: number;
+  // The user's window was backgrounded when this arrived — i.e. they missed it.
+  whileAway: boolean;
+  seen: boolean;
 }
 
 type ServerErrorEvent = Extract<ServerMeetingEvent, { type: "error" }>;
@@ -152,6 +180,11 @@ interface MeetingWorkspaceProps {
 
 const PENDING_WORKSPACE_COMMAND_KEY = "mila:pending-desktop-command";
 const STORED_AUTO_START_SIGNAL_TTL_MS = 10 * 60 * 1000;
+const LIVE_MIN_CHUNK_SECONDS = 0.9;
+const LIVE_FIRST_FLUSH_MS = 900;
+const LIVE_FLUSH_INTERVAL_MS = 1500;
+const LIVE_CHUNK_OVERLAP_SECONDS = 0.4;
+const LIVE_RMS_SPEECH_FLOOR = 0.0015;
 
 // Narrow view of the Electron preload bridge used to drive the desktop coaching
 // overlay. Declared locally so the web build stays decoupled from the shell.
@@ -177,6 +210,63 @@ type CaptureDesktopBridge = {
   };
 };
 
+// Native OS-notification bridge (Electron). Mention alerts use it so the user
+// is pinged even when the meeting window is backgrounded; `onActivated` fires
+// when they click a notification, echoing back the segment id so we can scroll
+// straight to that moment. Declared locally to keep the web build shell-agnostic
+// — outside Electron we fall back to the browser Notification API.
+type NotifyDesktopBridge = {
+  notifications?: {
+    isSupported: () => Promise<boolean>;
+    show: (input: {
+      title: string;
+      body: string;
+      tag?: string;
+      silent?: boolean;
+    }) => Promise<boolean>;
+    onActivated: (cb: (tag: string | null) => void) => () => void;
+  };
+};
+
+// Lets the workspace tell the desktop shell when a live transcription is running
+// so the menu bar can show a "🔴 REC" badge that stays visible while the user is
+// away in the call. Inert in a plain browser — the bridge only exists in Electron.
+type RecordingDesktopBridge = {
+  recording?: {
+    setState: (state: { active: boolean; title?: string }) => void;
+  };
+};
+
+// Split the free-text aliases preference ("Zul, MZ; Qarnain") into clean tokens.
+function parseMentionAliases(raw: string): string[] {
+  return raw
+    .split(/[\n,;]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+}
+
+// Collapse whitespace and clip to a notification-friendly length.
+function mentionSnippet(text: string, max = 160): string {
+  const clean = text.replace(/\s+/g, " ").trim();
+  return clean.length > max ? `${clean.slice(0, max - 1)}…` : clean;
+}
+
+// Turn a raw source id into the name shown in the transcript. "self"/"remote"
+// are the two truthful capture sources; a user-supplied override (from the
+// speaker legend) wins, then the account name for "self", then sane defaults.
+function resolveSpeakerName(
+  speakerId: string | undefined,
+  overrides: Record<string, string>,
+  selfName: string | undefined,
+): string {
+  if (!speakerId) return "Speaker";
+  const override = overrides[speakerId]?.trim();
+  if (override) return override;
+  if (speakerId === "self") return selfName?.trim() || "You";
+  if (speakerId === "remote") return "Meeting";
+  return speakerId;
+}
+
 export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const { preferences } = usePreferences();
   const apiHttpUrl = useMemo(() => resolveApiUrl(preferences), [preferences]);
@@ -197,9 +287,9 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const [pendingTitle, setPendingTitle] = useState<string | null>(null);
   const [mode, setMode] = useState<TranscriptMode>("translated");
   const [status, setStatus] = useState<SessionStatus>("idle");
-  const [autoStartEnabled, setAutoStartEnabled] = useState(true);
+  const [autoStartEnabled, setAutoStartEnabled] = useState(false);
   const [autoStartStatus, setAutoStartStatus] =
-    useState<AutoStartStatus>("watching");
+    useState<AutoStartStatus>("off");
   const [autoStartSignal, setAutoStartSignal] =
     useState<AutoStartSignal | null>(null);
   const [capabilities, setCapabilities] = useState<AppCapabilities>({
@@ -238,6 +328,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const systemSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioMergerRef = useRef<ChannelMergerNode | null>(null);
   const audioSinkRef = useRef<GainNode | null>(null);
   const micFlushIntervalRef = useRef<number | null>(null);
   const micFirstFlushTimeoutRef = useRef<number | null>(null);
@@ -248,6 +339,12 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   // a word that lands on a flush boundary is split between two chunks and
   // mis-transcribed in both.
   const pcmOverlapRef = useRef<Float32Array | null>(null);
+  // Second capture buffer: the system-audio loopback (everyone but this user),
+  // kept separate from the mic above so each is flushed and labelled by its own
+  // source ("self" vs "remote") rather than being summed into one stream.
+  const sysPcmBufferRef = useRef<Float32Array[]>([]);
+  const sysPcmBufferLengthRef = useRef(0);
+  const sysPcmOverlapRef = useRef<Float32Array | null>(null);
   const audioSampleRateRef = useRef(16000);
   const chunkIndexRef = useRef(0);
   const autoStartedSignalRef = useRef<string | null>(null);
@@ -264,6 +361,260 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
   );
 
   const clearNotice = useCallback(() => setNotice(null), []);
+
+  // --- Mention detection ("did someone call me?") -------------------------
+  // Who counts as "me": the account name (always) plus any nicknames/garbled
+  // spellings the user listed. The matcher derives tokens + a phonetic key, so
+  // it survives ASR mangling (e.g. "Zulqarnain" heard as "Hazel Kahnain").
+  const [mentions, setMentions] = useState<MentionRecord[]>([]);
+  const [mentionsOpen, setMentionsOpen] = useState(false);
+  const [away, setAway] = useState(false);
+  const processedSegmentsRef = useRef<Set<string>>(new Set());
+  const awayRef = useRef(false);
+  // One-time speaker tagging: per-meeting display-name overrides keyed by source
+  // id ("self"/"remote"). Ephemeral on purpose — cleared when a new meeting
+  // opens so the previous call's labels never leak into this one.
+  const [speakerNames, setSpeakerNames] = useState<Record<string, string>>({});
+  const speakerNamesRef = useRef(speakerNames);
+
+  const selfIdentity = useMemo<SelfIdentity>(
+    () => ({
+      name: user.name?.trim() || undefined,
+      aliases: parseMentionAliases(preferences.mentionAliases),
+    }),
+    [user.name, preferences.mentionAliases],
+  );
+  // Empty when there's nothing meaningful to match on (no name, no >1-char
+  // alias) — guards against firing on every segment for an unidentified user.
+  const mentionAliasTokens = useMemo(
+    () => buildAliasTokens(selfIdentity),
+    [selfIdentity],
+  );
+  const mentionsActive =
+    preferences.mentionAlerts && mentionAliasTokens.length > 0;
+  const mentionSegmentIds = useMemo(
+    () => new Set(mentions.map((mention) => mention.segmentId)),
+    [mentions],
+  );
+  // Mirror the live identity + enabled flag into refs so the segment-ingest
+  // callback can read the latest values while staying referentially stable
+  // (it must not be recreated on every keystroke in the aliases field, since it
+  // is wired into the socket handler's dependencies).
+  const selfIdentityRef = useRef(selfIdentity);
+  const mentionsActiveRef = useRef(mentionsActive);
+
+  // Display-name resolver + rename handler for the speaker legend. The resolver
+  // is reactive (the transcript re-labels on rename); the ref above feeds the
+  // event-time mention path without making the ingest callback churn.
+  const resolveSpeaker = useCallback(
+    (speakerId?: string) =>
+      resolveSpeakerName(speakerId, speakerNames, user.name ?? undefined),
+    [speakerNames, user.name],
+  );
+  const renameSpeaker = useCallback((speakerId: string, name: string) => {
+    setSpeakerNames((current) => {
+      const next = { ...current };
+      const trimmed = name.trim();
+      if (trimmed) next[speakerId] = trimmed;
+      else delete next[speakerId];
+      return next;
+    });
+  }, []);
+
+  // Bring the mentioned line into view and flash it. Search can hide the target
+  // row, so clear the filter first, then scroll on the next frame once it's in
+  // the DOM. Jumping to a mention also marks it read.
+  const scrollToMention = useCallback((segmentId: string) => {
+    setSearch("");
+    setMentions((current) =>
+      current.map((mention) =>
+        mention.segmentId === segmentId ? { ...mention, seen: true } : mention,
+      ),
+    );
+    window.requestAnimationFrame(() => {
+      const element = document.getElementById(`segment-${segmentId}`);
+      if (!element) return;
+      element.scrollIntoView({ behavior: "smooth", block: "center" });
+      element.classList.add("mila-mention-flash");
+      window.setTimeout(
+        () => element.classList.remove("mila-mention-flash"),
+        1800,
+      );
+    });
+  }, []);
+
+  const markMentionsSeen = useCallback(() => {
+    setMentions((current) =>
+      current.map((mention) => ({ ...mention, seen: true })),
+    );
+  }, []);
+
+  // Raise a native OS notification for a mention. Prefers the Electron bridge
+  // (works even when the app is fully backgrounded); otherwise falls back to the
+  // browser Notification API when the user has granted permission.
+  const notifyMentionOs = useCallback(
+    (record: MentionRecord) => {
+      const title = "Mila — you were mentioned";
+      const speaker = record.speaker ? `${record.speaker}: ` : "";
+      const body = `${speaker}“${mentionSnippet(record.text, 140)}”`;
+      const bridge = (window as Window & { mila?: NotifyDesktopBridge }).mila;
+      if (bridge?.notifications?.show) {
+        void bridge.notifications.show({
+          title,
+          body,
+          tag: record.segmentId,
+        });
+        return;
+      }
+      if (
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted"
+      ) {
+        try {
+          const native = new Notification(title, {
+            body,
+            tag: record.segmentId,
+          });
+          native.onclick = () => {
+            window.focus();
+            setMentionsOpen(true);
+            scrollToMention(record.segmentId);
+            native.close();
+          };
+        } catch {
+          // Some browsers throw if the document isn't allowed to notify.
+        }
+      }
+    },
+    [scrollToMention],
+  );
+
+  // Track whether the meeting window is backgrounded. "Away" = tab hidden or the
+  // window lost focus — that's when we escalate from an in-app banner to an OS
+  // ping, and the boundary that makes a mention count as "missed".
+  useEffect(() => {
+    const update = () => {
+      const hidden = document.hidden;
+      const unfocused =
+        typeof document.hasFocus === "function" && !document.hasFocus();
+      const next = Boolean(hidden || unfocused);
+      awayRef.current = next;
+      setAway(next);
+    };
+    update();
+    document.addEventListener("visibilitychange", update);
+    window.addEventListener("blur", update);
+    window.addEventListener("focus", update);
+    return () => {
+      document.removeEventListener("visibilitychange", update);
+      window.removeEventListener("blur", update);
+      window.removeEventListener("focus", update);
+    };
+  }, []);
+
+  useEffect(() => {
+    selfIdentityRef.current = selfIdentity;
+  }, [selfIdentity]);
+  useEffect(() => {
+    mentionsActiveRef.current = mentionsActive;
+  }, [mentionsActive]);
+  useEffect(() => {
+    speakerNamesRef.current = speakerNames;
+  }, [speakerNames]);
+
+  // Scan segments for mentions as they enter the workspace. Called from the live
+  // socket handler (`live` true → may alert) and from the restore loader (`live`
+  // false → populate the catch-up list from history, never alert). Dedupe is by
+  // segment id, so re-delivery or a re-render never double-counts. Identity and
+  // the enabled flag are read from refs, keeping this callback stable so wiring
+  // it into the socket handler doesn't churn the connection on every keystroke.
+  const ingestSegmentsForMentions = useCallback(
+    (incoming: TranscriptSegment[], live: boolean) => {
+      if (!mentionsActiveRef.current) return;
+      const identity = selfIdentityRef.current;
+      const fresh: MentionRecord[] = [];
+
+      for (const segment of incoming) {
+        if (processedSegmentsRef.current.has(segment.id)) continue;
+        processedSegmentsRef.current.add(segment.id);
+        const text =
+          segment.originalText?.trim() ||
+          segment.normalizedText?.trim() ||
+          segment.translatedText?.trim() ||
+          "";
+        if (!text) continue;
+        const result = detectMention(text, identity);
+        if (!result.matched || !result.best) continue;
+        fresh.push({
+          segmentId: segment.id,
+          at: Date.now(),
+          startMs: segment.startMs,
+          speaker: resolveSpeakerName(
+            segment.speakerId,
+            speakerNamesRef.current,
+            identity.name,
+          ),
+          text,
+          matchedAlias: result.best.matchedAlias,
+          evidence: result.best.evidence,
+          confidence: result.best.confidence,
+          whileAway: live && awayRef.current,
+          seen: false,
+        });
+      }
+
+      if (fresh.length === 0) return;
+      setMentions((current) => [...current, ...fresh]);
+      if (!live) return;
+
+      // Route the alert by where the user's attention is: a native ping when the
+      // window is backgrounded, an in-app banner when they're looking at Mila.
+      if (awayRef.current) {
+        for (const record of fresh) notifyMentionOs(record);
+        setMentionsOpen(true);
+        return;
+      }
+      const latest = fresh[fresh.length - 1];
+      showNotice({
+        tone: "info",
+        title:
+          fresh.length > 1
+            ? `You were mentioned ${fresh.length} times`
+            : "You were just mentioned",
+        message: `${latest.speaker}: “${mentionSnippet(latest.text, 120)}”`,
+      });
+    },
+    [notifyMentionOs, showNotice],
+  );
+
+  // Drop mention state when the transcript is cleared for a fresh session.
+  const resetMentionTracking = useCallback(() => {
+    processedSegmentsRef.current = new Set();
+    setMentions([]);
+    setMentionsOpen(false);
+    setSpeakerNames({});
+  }, []);
+
+  // Clicking a native notification (Electron) surfaces the window and tells us
+  // which mention fired — jump straight to it.
+  useEffect(() => {
+    const bridge = (window as Window & { mila?: NotifyDesktopBridge }).mila;
+    if (!bridge?.notifications?.onActivated) return;
+    return bridge.notifications.onActivated((tag) => {
+      setMentionsOpen(true);
+      if (tag) scrollToMention(tag);
+    });
+  }, [scrollToMention]);
+
+  // In a plain browser (no Electron bridge) request notification permission once,
+  // so the away→OS-ping path can work. Electron notifies natively, no prompt.
+  useEffect(() => {
+    if (!mentionsActive) return;
+    if (typeof window !== "undefined" && "mila" in window) return;
+    if (typeof Notification === "undefined") return;
+    if (Notification.permission !== "default") return;
+    void Notification.requestPermission().catch(() => undefined);
+  }, [mentionsActive]);
 
   const clearTranscriptionHealth = useCallback(() => {
     if (transcriptionHealthTimeoutRef.current) {
@@ -351,6 +702,22 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     return [...unique].map((code) => getLanguage(code));
   }, [segments]);
 
+  const vocabularyHints = useMemo(
+    () =>
+      buildVocabularyHints([
+        preferences.internalJargon,
+        preferences.mentionAliases,
+        user.name ?? "",
+        user.email.split("@")[0] ?? "",
+      ]),
+    [
+      preferences.internalJargon,
+      preferences.mentionAliases,
+      user.email,
+      user.name,
+    ],
+  );
+
   const connectSocket = useCallback(
     async (meetingSession: MeetingSession) =>
       new Promise<WebSocket>((resolve, reject) => {
@@ -397,6 +764,8 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
             );
             setNotes(event.notes);
             clearTranscriptionHealth();
+            // Live arrival — detect a mention and (if enabled) raise an alert.
+            ingestSegmentsForMentions([event.segment], true);
           }
 
           if (event.type === "notes") {
@@ -445,7 +814,9 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
         socket.onclose = () => {
           wsRef.current = null;
-          setStatus((current) => (current === "recording" ? "idle" : current));
+          setStatus((current) =>
+            current === "recording" || current === "paused" ? "idle" : current,
+          );
         };
       }),
     [
@@ -453,10 +824,11 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       apiWsUrl,
       clearTranscriptionHealth,
       markRecoverableTranscriptionIssue,
+      ingestSegmentsForMentions,
     ],
   );
 
-  const requestAssist = useCallback((turns: AssistTurn[], manual: boolean) => {
+  const requestAssist = useCallback((turns: AssistTurn[], manual: boolean, mode: AssistMode = "reply") => {
     const socket = wsRef.current;
     const sessionId = sessionRef.current?.id;
     if (!socket || socket.readyState !== WebSocket.OPEN || !sessionId) {
@@ -470,7 +842,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       setAssistPending(true);
     }
     socket.send(
-      JSON.stringify({ type: "assist-request", sessionId, turns, manual }),
+      JSON.stringify({ type: "assist-request", sessionId, turns, manual, mode }),
     );
   }, []);
 
@@ -498,10 +870,30 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     });
   }, [assistEnabled, status, assistPending, assistSuggestion, assistUnavailable]);
 
+  // Drive the menu-bar "🔴 REC" badge from the live recording state. We fold the
+  // "Live meeting indicator" preference in here so the main process can stay
+  // dumb and just reflect whatever active flag it's handed. Inert in a browser.
+  useEffect(() => {
+    const bridge = (window as Window & { mila?: RecordingDesktopBridge }).mila;
+    if (!bridge?.recording) return;
+    bridge.recording.setState({
+      active: preferences.liveMeetingIndicator && status === "recording",
+      title: session?.title ?? pendingTitle ?? undefined,
+    });
+  }, [
+    preferences.liveMeetingIndicator,
+    status,
+    session?.title,
+    pendingTitle,
+  ]);
+
   const resetPcmBuffer = useCallback(() => {
     pcmBufferRef.current = [];
     pcmBufferLengthRef.current = 0;
     pcmOverlapRef.current = null;
+    sysPcmBufferRef.current = [];
+    sysPcmBufferLengthRef.current = 0;
+    sysPcmOverlapRef.current = null;
   }, []);
 
   const stopLocalCapture = useCallback(
@@ -528,6 +920,9 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       systemSourceRef.current?.disconnect();
       systemSourceRef.current = null;
 
+      audioMergerRef.current?.disconnect();
+      audioMergerRef.current = null;
+
       audioSinkRef.current?.disconnect();
       audioSinkRef.current = null;
 
@@ -551,8 +946,18 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     [resetPcmBuffer],
   );
 
-  const flushMicrophoneChunk = useCallback(
+  // Flush one source's buffered PCM as a single labelled audio-chunk. Both the
+  // mic ("self") and the system-audio loopback ("remote") run through here with
+  // their own buffer + overlap refs, so each segment is tagged by true source
+  // instead of the two being summed into one anonymous stream.
+  const flushSourceChunk = useCallback(
     (
+      source: "self" | "remote",
+      buffers: {
+        data: { current: Float32Array[] };
+        length: { current: number };
+        overlap: { current: Float32Array | null };
+      },
       meetingSession: MeetingSession,
       socket: WebSocket,
       options: { force?: boolean } = {},
@@ -561,30 +966,33 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
         return false;
       }
 
-      const totalLength = pcmBufferLengthRef.current;
+      const totalLength = buffers.length.current;
 
       if (!totalLength) {
         return false;
       }
 
-      const rawPcm = mergePcmChunks(pcmBufferRef.current, totalLength);
-      pcmBufferRef.current = [];
-      pcmBufferLengthRef.current = 0;
+      const rawPcm = mergePcmChunks(buffers.data.current, totalLength);
+      buffers.data.current = [];
+      buffers.length.current = 0;
 
-      if (!options.force && rawPcm.length < audioSampleRateRef.current) {
-        pcmBufferRef.current = [rawPcm];
-        pcmBufferLengthRef.current = rawPcm.length;
+      const minimumLiveSamples = Math.round(
+        audioSampleRateRef.current * LIVE_MIN_CHUNK_SECONDS,
+      );
+      if (!options.force && rawPcm.length < minimumLiveSamples) {
+        buffers.data.current = [rawPcm];
+        buffers.length.current = rawPcm.length;
         return false;
       }
 
-      if (!options.force && calculateRms(rawPcm) < 0.003) {
+      if (!options.force && calculateRms(rawPcm) < LIVE_RMS_SPEECH_FLOOR) {
         // Drop overlap on silence so the next speech chunk doesn't begin
         // with stale audio from before the pause.
-        pcmOverlapRef.current = null;
+        buffers.overlap.current = null;
         return false;
       }
 
-      const overlap = pcmOverlapRef.current;
+      const overlap = buffers.overlap.current;
       let payloadPcm: Float32Array;
       if (overlap && overlap.length > 0) {
         payloadPcm = new Float32Array(overlap.length + rawPcm.length);
@@ -596,9 +1004,9 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
       const overlapSamples = Math.min(
         rawPcm.length,
-        Math.round(audioSampleRateRef.current * 0.25),
+        Math.round(audioSampleRateRef.current * LIVE_CHUNK_OVERLAP_SECONDS),
       );
-      pcmOverlapRef.current = rawPcm.slice(rawPcm.length - overlapSamples);
+      buffers.overlap.current = rawPcm.slice(rawPcm.length - overlapSamples);
 
       const wavBytes = encodeWav(
         downsamplePcm(payloadPcm, audioSampleRateRef.current, 16000),
@@ -610,15 +1018,53 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
           type: "audio-chunk",
           sessionId: meetingSession.id,
           mimeType: "audio/wav",
-          chunkId: `${meetingSession.id}-mic-${chunkIndexRef.current++}`,
+          chunkId: `${meetingSession.id}-${source}-${chunkIndexRef.current++}`,
           capturedAt: new Date().toISOString(),
           audioBase64: uint8ArrayToBase64(wavBytes),
+          vocabulary: vocabularyHints,
+          speakerId: source,
         }),
       );
 
       return true;
     },
-    [],
+    [vocabularyHints],
+  );
+
+  // Flush both capture sources for this tick. Each returns false when it has
+  // nothing worth sending (empty or below the silence floor), so a one-sided
+  // moment only emits the side that actually carried speech.
+  const flushMicrophoneChunk = useCallback(
+    (
+      meetingSession: MeetingSession,
+      socket: WebSocket,
+      options: { force?: boolean } = {},
+    ) => {
+      const selfSent = flushSourceChunk(
+        "self",
+        {
+          data: pcmBufferRef,
+          length: pcmBufferLengthRef,
+          overlap: pcmOverlapRef,
+        },
+        meetingSession,
+        socket,
+        options,
+      );
+      const remoteSent = flushSourceChunk(
+        "remote",
+        {
+          data: sysPcmBufferRef,
+          length: sysPcmBufferLengthRef,
+          overlap: sysPcmOverlapRef,
+        },
+        meetingSession,
+        socket,
+        options,
+      );
+      return selfSent || remoteSent;
+    },
+    [flushSourceChunk],
   );
 
   const buildAuthHeaders = useCallback(
@@ -702,6 +1148,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       clearTranscriptionHealth();
       setStatus("connecting");
       setSegments([]);
+      resetMentionTracking();
       chunkIndexRef.current = 0;
 
       stopLocalCapture();
@@ -730,6 +1177,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
       clearTranscriptionHealth,
       connectSocket,
       createSession,
+      resetMentionTracking,
       stopLocalCapture,
     ],
   );
@@ -759,7 +1207,11 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
       const detail = (await response.json()) as MeetingSessionDetail;
       setSession(detail.session);
+      resetMentionTracking();
       setSegments(detail.segments);
+      // Already-spoken segments populate the catch-up list but never alert —
+      // re-opening a meeting shouldn't replay every past mention as a fresh ping.
+      ingestSegmentsForMentions(detail.segments, false);
       setNotes(detail.notes);
 
       const socket = await connectSocket(detail.session);
@@ -768,7 +1220,15 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
 
       return detail;
     },
-    [apiHttpUrl, buildAuthHeaders, clearNotice, connectSocket, stopLocalCapture],
+    [
+      apiHttpUrl,
+      buildAuthHeaders,
+      clearNotice,
+      connectSocket,
+      ingestSegmentsForMentions,
+      resetMentionTracking,
+      stopLocalCapture,
+    ],
   );
 
   const sendMockChunk = useCallback(
@@ -846,42 +1306,72 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
         await audioContext.resume();
       }
       const micSource = audioContext.createMediaStreamSource(stream);
-      const processor = audioContext.createScriptProcessor(4096, 1, 1);
       const sink = audioContext.createGain();
       sink.gain.value = 0;
 
       audioContextRef.current = audioContext;
       audioSampleRateRef.current = audioContext.sampleRate;
       audioSourceRef.current = micSource;
-      audioProcessorRef.current = processor;
       audioSinkRef.current = sink;
 
-      processor.onaudioprocess = (event) => {
-        const input = event.inputBuffer.getChannelData(0);
-        const chunk = new Float32Array(input.length);
-        chunk.set(input);
-        pcmBufferRef.current.push(chunk);
-        pcmBufferLengthRef.current += chunk.length;
-      };
+      const systemSource = systemStream
+        ? audioContext.createMediaStreamSource(systemStream)
+        : null;
+      systemSourceRef.current = systemSource;
 
-      // Fan both feeds into the one processor — Web Audio sums them, so a single
-      // mono PCM stream carries mic + system audio downstream to the ASR worker.
-      micSource.connect(processor);
-      if (systemStream) {
-        const systemSource = audioContext.createMediaStreamSource(systemStream);
-        systemSourceRef.current = systemSource;
-        systemSource.connect(processor);
+      if (systemSource) {
+        // Keep the two feeds on separate channels (mic → 0, system → 1) instead
+        // of summing them, so each transcript segment can be labelled by its
+        // true source. A ChannelMerger lands each source on its own channel and
+        // the 2-in ScriptProcessor reads them apart in onaudioprocess.
+        const merger = audioContext.createChannelMerger(2);
+        audioMergerRef.current = merger;
+        micSource.connect(merger, 0, 0);
+        systemSource.connect(merger, 0, 1);
+
+        const processor = audioContext.createScriptProcessor(4096, 2, 1);
+        audioProcessorRef.current = processor;
+        processor.onaudioprocess = (event) => {
+          const mic = event.inputBuffer.getChannelData(0);
+          const micChunk = new Float32Array(mic.length);
+          micChunk.set(mic);
+          pcmBufferRef.current.push(micChunk);
+          pcmBufferLengthRef.current += micChunk.length;
+
+          if (event.inputBuffer.numberOfChannels > 1) {
+            const sys = event.inputBuffer.getChannelData(1);
+            const sysChunk = new Float32Array(sys.length);
+            sysChunk.set(sys);
+            sysPcmBufferRef.current.push(sysChunk);
+            sysPcmBufferLengthRef.current += sysChunk.length;
+          }
+        };
+        merger.connect(processor);
+        processor.connect(sink);
+      } else {
+        // Mic-only fallback (no loopback grant, or not the desktop shell): a
+        // single mono processor, every segment labelled "self".
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        audioProcessorRef.current = processor;
+        processor.onaudioprocess = (event) => {
+          const mic = event.inputBuffer.getChannelData(0);
+          const micChunk = new Float32Array(mic.length);
+          micChunk.set(mic);
+          pcmBufferRef.current.push(micChunk);
+          pcmBufferLengthRef.current += micChunk.length;
+        };
+        micSource.connect(processor);
+        processor.connect(sink);
       }
-      processor.connect(sink);
       sink.connect(audioContext.destination);
 
       micFirstFlushTimeoutRef.current = window.setTimeout(() => {
         micFirstFlushTimeoutRef.current = null;
         flushMicrophoneChunk(meetingSession, socket);
-      }, 2000);
+      }, LIVE_FIRST_FLUSH_MS);
       micFlushIntervalRef.current = window.setInterval(() => {
         flushMicrophoneChunk(meetingSession, socket);
-      }, 5000);
+      }, LIVE_FLUSH_INTERVAL_MS);
       setStatus("recording");
     },
     [acquireSystemAudioStream, flushMicrophoneChunk, resetPcmBuffer],
@@ -1261,10 +1751,53 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     ],
   );
 
+  const pauseRecording = useCallback(() => {
+    if (status !== "recording") return;
+
+    const activeSession = sessionRef.current;
+    const socket = wsRef.current;
+
+    if (activeSession && socket?.readyState === WebSocket.OPEN) {
+      flushMicrophoneChunk(activeSession, socket, { force: true });
+      socket.send(JSON.stringify({ type: "pause", sessionId: activeSession.id }));
+    }
+
+    stopLocalCapture(true);
+    resetPcmBuffer();
+    setStatus("paused");
+  }, [flushMicrophoneChunk, resetPcmBuffer, status, stopLocalCapture]);
+
+  const resumeRecording = useCallback(async () => {
+    if (status !== "paused") return;
+
+    const activeSession = sessionRef.current;
+    const socket = wsRef.current;
+
+    if (!activeSession || socket?.readyState !== WebSocket.OPEN) {
+      setError("The live meeting connection is closed. Start a new capture session.");
+      setStatus("error");
+      return;
+    }
+
+    try {
+      socket.send(JSON.stringify({ type: "resume", sessionId: activeSession.id }));
+      await attachMicrophone(activeSession, socket);
+      setError(null);
+    } catch (resumeError) {
+      const captureError = describeCaptureError(resumeError);
+      setMicPermission((current) =>
+        captureError.permissionDenied ? "denied" : current,
+      );
+      setError(captureError.message);
+      setStatus("error");
+    }
+  }, [attachMicrophone, status]);
+
   const resetWorkspaceForNewMeeting = useCallback(() => {
     stopRecording({ keepalive: true });
     setSession(null);
     setSegments([]);
+    resetMentionTracking();
     setNotes(createEmptyNotes(outputLanguage));
     setPendingTitle(null);
     setError(null);
@@ -1275,6 +1808,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
     clearNotice,
     clearTranscriptionHealth,
     outputLanguage,
+    resetMentionTracking,
     stopRecording,
   ]);
 
@@ -1468,17 +2002,44 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
               <div className="mt-3 space-y-2">
                 <button
                   type="button"
-                  onClick={startRecording}
+                  onClick={() => {
+                    if (status === "paused") {
+                      void resumeRecording();
+                      return;
+                    }
+                    void startRecording();
+                  }}
+                  disabled={
+                    status !== "idle" &&
+                    status !== "error" &&
+                    status !== "paused"
+                  }
                   className={primaryButtonClass}
                   data-testid="start-mic"
                 >
-                  <Mic size={17} />
-                  Start live capture
+                  {status === "paused" ? <Play size={17} /> : <Mic size={17} />}
+                  {status === "paused" ? "Resume live capture" : "Start live capture"}
                 </button>
-                <div className="grid grid-cols-2 gap-2">
+                <div className="grid grid-cols-3 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (status === "paused") {
+                        void resumeRecording();
+                        return;
+                      }
+                      pauseRecording();
+                    }}
+                    disabled={status !== "recording" && status !== "paused"}
+                    className={secondaryButtonClass}
+                  >
+                    {status === "paused" ? <Play size={16} /> : <Pause size={16} />}
+                    {status === "paused" ? "Resume" : "Pause"}
+                  </button>
                   <button
                     type="button"
                     onClick={() => stopRecording()}
+                    disabled={!session}
                     className={secondaryButtonClass}
                   >
                     <Square size={16} />
@@ -1487,6 +2048,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
                   <button
                     type="button"
                     onClick={simulateChunk}
+                    disabled={status === "recording" || status === "paused"}
                     className={secondaryButtonClass}
                   >
                     <Play size={16} />
@@ -1573,7 +2135,7 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
               <div className="flex items-center justify-between text-sm">
                 <span className="mila-muted inline-flex items-center gap-2">
                   <Radar size={15} />
-                  Auto-start
+                  Auto-capture
                 </span>
                 <button
                   type="button"
@@ -1582,8 +2144,8 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
                   className="text-[var(--accent)] transition hover:text-[var(--foreground)]"
                   title={
                     autoStartEnabled
-                      ? "Disable auto-start"
-                      : "Enable auto-start"
+                      ? "Disable auto-capture"
+                      : "Enable auto-capture"
                   }
                 >
                   {autoStartEnabled ? (
@@ -1758,12 +2320,31 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
             enabled={assistEnabled}
             onEnabledChange={handleAssistEnabledChange}
             segments={segments}
-            isLive={status === "recording" || status === "connecting"}
+            isLive={
+              status === "recording" ||
+              status === "connecting" ||
+              status === "paused"
+            }
             pending={assistPending}
             suggestion={assistSuggestion}
             unavailableReason={assistUnavailable}
             onRequest={requestAssist}
           />
+
+          {(mentions.length > 0 ||
+            (mentionsActive &&
+              (status === "recording" || status === "connecting"))) && (
+            <MentionsCard
+              mentions={mentions}
+              open={mentionsOpen}
+              watching={mentionsActive}
+              live={status === "recording" || status === "connecting"}
+              away={away}
+              onToggle={() => setMentionsOpen((current) => !current)}
+              onJump={scrollToMention}
+              onMarkSeen={markMentionsSeen}
+            />
+          )}
 
           <div className="grid min-h-0 flex-1 grid-cols-1 overflow-hidden xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
             <TranscriptPanel
@@ -1771,11 +2352,15 @@ export function MeetingWorkspace({ token, user }: MeetingWorkspaceProps) {
               mode={mode}
               isLive={status === "recording" || status === "connecting"}
               transcriptionHealth={transcriptionHealth}
+              mentionIds={mentionSegmentIds}
+              resolveSpeaker={resolveSpeaker}
+              onRenameSpeaker={renameSpeaker}
             />
             <NotesPanel
               notes={notes}
               segments={segments}
               isLive={status === "recording" || status === "connecting"}
+              onJumpToSegment={scrollToMention}
             />
           </div>
         </section>
@@ -1832,6 +2417,140 @@ function WorkspaceAlert({
           <X size={15} />
         </button>
       </div>
+    </div>
+  );
+}
+
+// The "did someone call me?" surface. Collapsed it's a one-line status with an
+// unread count; expanded it lists every mention newest-first so a user coming
+// back from being away can see exactly where their name came up and jump there.
+function MentionsCard({
+  mentions,
+  open,
+  watching,
+  live,
+  away,
+  onToggle,
+  onJump,
+  onMarkSeen,
+}: {
+  mentions: MentionRecord[];
+  open: boolean;
+  watching: boolean;
+  live: boolean;
+  away: boolean;
+  onToggle: () => void;
+  onJump: (segmentId: string) => void;
+  onMarkSeen: () => void;
+}) {
+  const total = mentions.length;
+  const unseen = mentions.filter((mention) => !mention.seen).length;
+  const awayUnseen = mentions.filter(
+    (mention) => mention.whileAway && !mention.seen,
+  ).length;
+  const ordered = useMemo(
+    () => [...mentions].sort((a, b) => b.startMs - a.startMs),
+    [mentions],
+  );
+
+  const headline =
+    total === 0
+      ? "Listening for your name"
+      : unseen > 0
+        ? `${unseen} new mention${unseen === 1 ? "" : "s"}`
+        : `${total} mention${total === 1 ? "" : "s"}`;
+  const sub =
+    total === 0
+      ? watching && live
+        ? away
+          ? "You're away — Mila will ping you if someone says your name."
+          : "Mila will flag the moment someone says your name."
+        : "Mila flags the moment someone says your name."
+      : awayUnseen > 0
+        ? `${awayUnseen} happened while you were away — tap to catch up.`
+        : "Tap one to jump to that moment in the transcript.";
+
+  return (
+    <div className="border-b border-[var(--accent-border)] bg-[var(--accent-faint)] px-5 py-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-3 text-left"
+        aria-expanded={open}
+      >
+        <span className="relative grid h-8 w-8 shrink-0 place-items-center rounded-full border border-[var(--accent-border)] bg-[var(--accent-faint)] text-[var(--accent)]">
+          <AtSign size={16} />
+          {unseen > 0 && (
+            <span className="absolute -right-1 -top-1 grid h-4 min-w-4 place-items-center rounded-full bg-[var(--accent)] px-1 text-[10px] font-bold text-[#061113]">
+              {unseen}
+            </span>
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-[var(--foreground)]">
+            {headline}
+          </span>
+          <span className="mila-muted block truncate text-xs leading-5">
+            {sub}
+          </span>
+        </span>
+        {total > 0 && (
+          <ChevronDown
+            size={16}
+            className={`shrink-0 text-[var(--muted-soft)] transition-transform ${
+              open ? "rotate-180" : ""
+            }`}
+          />
+        )}
+      </button>
+
+      {open && total > 0 && (
+        <div className="mt-3 space-y-2">
+          {unseen > 0 && (
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={onMarkSeen}
+                className="mila-muted text-xs transition hover:text-[var(--foreground)]"
+              >
+                Mark all read
+              </button>
+            </div>
+          )}
+          <ul className="space-y-2">
+            {ordered.map((mention) => (
+              <li key={mention.segmentId}>
+                <button
+                  type="button"
+                  onClick={() => onJump(mention.segmentId)}
+                  className={
+                    mention.seen
+                      ? "flex w-full items-start gap-3 rounded-lg border border-[var(--border)] px-3 py-2 text-left transition hover:bg-white/[0.04]"
+                      : "flex w-full items-start gap-3 rounded-lg border border-[var(--accent-border)] bg-[var(--accent-faint)] px-3 py-2 text-left transition hover:bg-white/[0.04]"
+                  }
+                >
+                  <span className="mila-muted mt-0.5 shrink-0 font-mono text-[11px]">
+                    {formatTime(mention.startMs)}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2 text-xs font-semibold text-[var(--foreground)]">
+                      <span className="truncate">{mention.speaker}</span>
+                      {mention.whileAway && (
+                        <span className="shrink-0 rounded bg-[var(--warm-faint)] px-1.5 py-0.5 text-[10px] font-medium text-[var(--warm)]">
+                          while away
+                        </span>
+                      )}
+                    </span>
+                    <span className="mila-muted mt-0.5 block truncate text-xs leading-5">
+                      {mentionSnippet(mention.text, 120)}
+                    </span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }
@@ -2034,7 +2753,11 @@ function buildCaptureHealth({
   status: SessionStatus;
 }) {
   const connectionTone =
-    status === "error" || error ? "warning" : status === "recording" ? "good" : "neutral";
+    status === "error" || error
+      ? "warning"
+      : status === "recording" || status === "paused"
+        ? "good"
+        : "neutral";
   const audioTone = capabilities.supportsRealAudio
     ? micPermission === "denied" || micPermission === "unsupported"
       ? "warning"
@@ -2064,12 +2787,19 @@ function buildCaptureHealth({
   ].filter((tone) => tone === "warning").length;
 
   return {
-    tone: warningCount > 0 ? "warning" : status === "recording" ? "good" : "neutral",
+    tone:
+      warningCount > 0
+        ? "warning"
+        : status === "recording" || status === "paused"
+          ? "good"
+          : "neutral",
     label:
       warningCount > 0
         ? "Needs check"
         : status === "recording"
           ? "Healthy"
+          : status === "paused"
+            ? "Paused"
           : "Ready",
     items: [
       {
@@ -2078,6 +2808,8 @@ function buildCaptureHealth({
         value:
           status === "recording"
             ? "Connected"
+            : status === "paused"
+              ? "Paused"
             : status === "connecting"
               ? "Connecting"
               : status === "error" || error
@@ -2115,18 +2847,155 @@ function buildCaptureHealth({
   };
 }
 
+// "self" is the user's own microphone, "remote" is everyone else heard through
+// the system-audio loopback. Any other id is an explicit override the user typed.
+function SpeakerIcon({
+  speakerId,
+  size = 13,
+}: {
+  speakerId?: string;
+  size?: number;
+}) {
+  if (speakerId === "self") {
+    return <Mic size={size} className="text-[var(--accent)]" />;
+  }
+  return <Volume2 size={size} className="text-[var(--warm)]" />;
+}
+
+// The legend doubles as the rename control: each distinct capture source becomes
+// a chip the user can relabel (e.g. "Meeting" → "Ravi") so the transcript reads
+// in real names. Renames live in component state for the session — no persistence,
+// which keeps this off the `set-state-in-effect` lint path entirely.
+function SpeakerLegend({
+  speakerIds,
+  resolveSpeaker,
+  onRenameSpeaker,
+}: {
+  speakerIds: string[];
+  resolveSpeaker: (speakerId?: string) => string;
+  onRenameSpeaker: (speakerId: string, name: string) => void;
+}) {
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-2">
+      <span className="mila-muted text-xs">Voices</span>
+      {speakerIds.map((speakerId) => (
+        <SpeakerChip
+          key={speakerId}
+          speakerId={speakerId}
+          label={resolveSpeaker(speakerId)}
+          onRename={(name) => onRenameSpeaker(speakerId, name)}
+        />
+      ))}
+    </div>
+  );
+}
+
+function SpeakerChip({
+  speakerId,
+  label,
+  onRename,
+}: {
+  speakerId: string;
+  label: string;
+  onRename: (name: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(label);
+
+  const startEditing = () => {
+    setDraft(label);
+    setEditing(true);
+  };
+  const commit = () => {
+    onRename(draft);
+    setEditing(false);
+  };
+  const cancel = () => {
+    setDraft(label);
+    setEditing(false);
+  };
+
+  if (editing) {
+    return (
+      <span className="mila-surface-raised inline-flex items-center gap-1 rounded-full border border-[var(--accent-border)] px-2 py-1 text-xs">
+        <SpeakerIcon speakerId={speakerId} size={12} />
+        <input
+          autoFocus
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") commit();
+            if (event.key === "Escape") cancel();
+          }}
+          className="w-24 bg-transparent text-xs text-[var(--foreground)] outline-none"
+          aria-label="Speaker name"
+        />
+        <button
+          type="button"
+          onClick={commit}
+          className="text-[var(--accent)] transition hover:opacity-70"
+          aria-label="Save name"
+        >
+          <CheckCircle2 size={13} />
+        </button>
+        <button
+          type="button"
+          onClick={cancel}
+          className="mila-muted transition hover:opacity-70"
+          aria-label="Cancel"
+        >
+          <X size={13} />
+        </button>
+      </span>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={startEditing}
+      className="mila-surface-raised group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium text-[var(--foreground)] transition hover:border-[var(--accent-border)]"
+      title="Rename this voice"
+    >
+      <SpeakerIcon speakerId={speakerId} size={12} />
+      {label}
+      <Pencil
+        size={11}
+        className="mila-muted opacity-0 transition group-hover:opacity-100"
+      />
+    </button>
+  );
+}
+
 function TranscriptPanel({
   segments,
   mode,
   isLive,
   transcriptionHealth,
+  mentionIds,
+  resolveSpeaker,
+  onRenameSpeaker,
 }: {
   segments: TranscriptSegment[];
   mode: TranscriptMode;
   isLive: boolean;
   transcriptionHealth: TranscriptionHealth;
+  mentionIds?: Set<string>;
+  resolveSpeaker: (speakerId?: string) => string;
+  onRenameSpeaker: (speakerId: string, name: string) => void;
 }) {
   const isCatchingUp = isLive && transcriptionHealth === "catching-up";
+
+  // Distinct capture sources present in the transcript, in first-seen order, so
+  // the legend lists exactly the voices Mila has actually heard.
+  const speakerOrder = useMemo(() => {
+    const seen: string[] = [];
+    for (const segment of segments) {
+      const id = segment.speakerId;
+      if (id && !seen.includes(id)) seen.push(id);
+    }
+    return seen;
+  }, [segments]);
 
   return (
     <section className="min-h-[520px] overflow-y-auto border-b border-[var(--border)] p-5 xl:min-h-0 xl:border-b-0 xl:border-r">
@@ -2163,6 +3032,14 @@ function TranscriptPanel({
         </span>
       </div>
 
+      {speakerOrder.length > 0 && (
+        <SpeakerLegend
+          speakerIds={speakerOrder}
+          resolveSpeaker={resolveSpeaker}
+          onRenameSpeaker={onRenameSpeaker}
+        />
+      )}
+
       <div className="space-y-3">
         {segments.length === 0 && (
           <div className="mila-surface-soft flex flex-col items-center gap-3 rounded-lg border border-dashed px-6 py-12 text-center">
@@ -2183,19 +3060,34 @@ function TranscriptPanel({
           const displayText =
             mode === "original" ? segment.originalText : segment.translatedText;
           const language = getLanguage(segment.detectedLanguage);
+          const isMention = mentionIds?.has(segment.id) ?? false;
 
           return (
             <article
               key={segment.id}
-              className="mila-surface-raised rounded-lg border p-4"
+              id={`segment-${segment.id}`}
+              className={
+                isMention
+                  ? "mila-surface-raised scroll-mt-4 rounded-lg border border-[var(--accent-border)] bg-[var(--accent-faint)] p-4 ring-1 ring-[var(--accent-border)]"
+                  : "mila-surface-raised scroll-mt-4 rounded-lg border p-4"
+              }
             >
               <div className="mila-muted mb-2 flex flex-wrap items-center gap-2 text-xs">
                 <span className="font-mono">{formatTime(segment.startMs)}</span>
-                <span>{segment.speakerId}</span>
+                <span className="inline-flex items-center gap-1 font-medium text-[var(--foreground)]">
+                  <SpeakerIcon speakerId={segment.speakerId} size={12} />
+                  {resolveSpeaker(segment.speakerId)}
+                </span>
                 <span className="rounded bg-[var(--accent-faint)] px-2 py-0.5 text-[var(--accent)]">
                   {language.nativeLabel}
                 </span>
                 <span>{Math.round(segment.confidence * 100)}%</span>
+                {isMention && (
+                  <span className="inline-flex items-center gap-1 rounded-full border border-[var(--accent-border)] px-2 py-0.5 font-medium text-[var(--accent)]">
+                    <AtSign size={11} />
+                    mentioned you
+                  </span>
+                )}
               </div>
               <p
                 dir={mode === "original" ? segment.direction : "ltr"}
@@ -2215,10 +3107,12 @@ function NotesPanel({
   notes,
   segments,
   isLive,
+  onJumpToSegment,
 }: {
   notes: MeetingNotes;
   segments: TranscriptSegment[];
   isLive: boolean;
+  onJumpToSegment: (segmentId: string) => void;
 }) {
   const actionReview = useMemo(
     () => buildMeetingActionReview(notes),
@@ -2286,7 +3180,15 @@ function NotesPanel({
                   className="mila-muted flex gap-2 text-sm leading-6"
                 >
                   <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--warm)]" />
-                  <span>{formatAction(item)}</span>
+                  <span>
+                    {formatAction(item)}
+                    {item.sourceSegmentId && (
+                      <AnchorButton
+                        startMs={item.sourceStartMs}
+                        onClick={() => onJumpToSegment(item.sourceSegmentId!)}
+                      />
+                    )}
+                  </span>
                 </li>
               ))}
             </ul>
@@ -2295,13 +3197,54 @@ function NotesPanel({
           )}
         </NoteBlock>
         <NoteBlock title="Decisions">
-          <BulletList
-            items={notes.decisions}
-            empty="Agreements made on the call will be listed here."
-          />
+          {notes.decisionItems?.length ? (
+            <ul className="space-y-2">
+              {notes.decisionItems.map((item) => (
+                <li
+                  key={item.id}
+                  className="mila-muted flex gap-2 text-sm leading-6"
+                >
+                  <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--accent)]" />
+                  <span>
+                    {item.text}
+                    {item.sourceSegmentId && (
+                      <AnchorButton
+                        startMs={item.sourceStartMs}
+                        onClick={() => onJumpToSegment(item.sourceSegmentId!)}
+                      />
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <BulletList
+              items={notes.decisions}
+              empty="Agreements made on the call will be listed here."
+            />
+          )}
         </NoteBlock>
       </div>
     </section>
+  );
+}
+
+function AnchorButton({
+  startMs,
+  onClick,
+}: {
+  startMs?: number;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="ml-2 inline-flex items-center rounded border border-[var(--accent-border)] px-1.5 py-0.5 align-middle font-mono text-[10px] text-[var(--accent)] transition hover:bg-[var(--accent-faint)]"
+      title="Jump to transcript"
+    >
+      @{formatTime(startMs ?? 0)}
+    </button>
   );
 }
 
@@ -2597,6 +3540,10 @@ function statusBadgeClass(status: SessionStatus) {
     return `${base} bg-[var(--accent-faint)] text-[var(--accent)]`;
   }
 
+  if (status === "paused") {
+    return `${base} bg-[rgba(250,204,21,0.12)] text-yellow-100`;
+  }
+
   if (status === "connecting" || status === "processing") {
     return `${base} bg-[rgba(103,232,249,0.1)] text-[var(--accent)]`;
   }
@@ -2620,6 +3567,23 @@ function normalizeLanguage(value: string): SupportedLanguageCode {
   return (allowed as string[]).includes(value)
     ? (value as SupportedLanguageCode)
     : "en";
+}
+
+function buildVocabularyHints(values: string[]): string[] {
+  const seen = new Set<string>();
+  const hints: string[] = [];
+  for (const value of values) {
+    for (const term of value.split(/[\n,;]/)) {
+      const normalized = term.replace(/\s+/g, " ").trim();
+      if (!normalized) continue;
+      const key = normalized.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hints.push(normalized.slice(0, 80));
+      if (hints.length >= 40) return hints;
+    }
+  }
+  return hints;
 }
 
 function formatTime(milliseconds: number) {
@@ -3260,14 +4224,25 @@ function uint8ArrayToBase64(bytes: Uint8Array) {
 
 function toMarkdown(notes: MeetingNotes) {
   const actions =
-    notes.actionItems.map((item) => `- [ ] ${item.text}`).join("\n") ||
+    notes.actionItems
+      .map((item) => `- [ ] ${item.text}${formatMarkdownAnchor(item.sourceStartMs)}`)
+      .join("\n") ||
     "- None";
   const keyPoints =
     notes.keyPoints.map((item) => `- ${item}`).join("\n") || "- None";
   const decisions =
-    notes.decisions.map((item) => `- ${item}`).join("\n") || "- None";
+    (notes.decisionItems?.length
+      ? notes.decisionItems.map(
+          (item) => `- ${item.text}${formatMarkdownAnchor(item.sourceStartMs)}`,
+        )
+      : notes.decisions.map((item) => `- ${item}`)
+    ).join("\n") || "- None";
 
   return `# Mila Notes\n\n## Summary\n${notes.summary}\n\n## Key Points\n${keyPoints}\n\n## Action Items\n${actions}\n\n## Decisions\n${decisions}\n`;
+}
+
+function formatMarkdownAnchor(startMs: number | undefined) {
+  return typeof startMs === "number" ? ` (@${formatTime(startMs)})` : "";
 }
 
 function slugifyForFilename(input: string) {

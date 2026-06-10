@@ -2,6 +2,7 @@
 
 import { supportedLanguages } from "@mila/shared";
 import {
+  AtSign,
   Bell,
   BookOpen,
   Bot,
@@ -664,8 +665,8 @@ function PreferencesPanel({
         </SettingsRow>
         <SettingsRow
           icon={FileText}
-          title="Internal jargon"
-          description="Teach Mila recurring project names, acronyms, and people."
+          title="Custom vocabulary"
+          description="Bias live transcription toward recurring names, acronyms, products, and mixed-language terms."
           wide
         >
           <textarea
@@ -673,7 +674,7 @@ function PreferencesPanel({
             onChange={(event) =>
               updatePreference("internalJargon", event.target.value)
             }
-            placeholder="Moove, Callipo, Project AlphaDuck..."
+            placeholder="Moove, Callipo, Project AlphaDuck, Zulqarnain"
             className="min-h-28 w-full resize-y rounded-lg border border-white/10 bg-[#18191e] px-4 py-3 text-sm text-white outline-none placeholder:text-[#777c82] focus:border-[#67e8f9]/70"
           />
         </SettingsRow>
@@ -913,6 +914,34 @@ function NotificationsPanel({
               );
             })}
           </div>
+        </SettingsRow>
+      </SettingsBlock>
+
+      <SettingsBlock title="When someone says your name">
+        <SettingsRow
+          icon={AtSign}
+          title="Mention alerts"
+          description="Alert me the moment a participant says my name — a banner when Mila is in front, an OS notification when it's in the background."
+        >
+          <Toggle
+            checked={state.mentionAlerts}
+            onChange={(value) => updatePreference("mentionAlerts", value)}
+          />
+        </SettingsRow>
+        <SettingsRow
+          icon={UserRound}
+          title="Names & nicknames to listen for"
+          description="Your account name is always matched. Add nicknames, initials, or the way your name tends to get misheard — speech-to-text often mangles proper nouns, so spelling out the garbled version helps Mila still catch it."
+          wide
+        >
+          <textarea
+            value={state.mentionAliases}
+            onChange={(event) =>
+              updatePreference("mentionAliases", event.target.value)
+            }
+            placeholder="Zul, MZ, Qarnain"
+            className="min-h-20 w-full resize-y rounded-lg border border-white/10 bg-[#18191e] px-4 py-3 text-sm text-white outline-none placeholder:text-[#777c82] focus:border-[#67e8f9]/70"
+          />
         </SettingsRow>
       </SettingsBlock>
 

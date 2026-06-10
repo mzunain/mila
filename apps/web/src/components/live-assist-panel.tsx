@@ -2,19 +2,24 @@
 
 import {
   ArrowRight,
+  CheckCircle2,
+  History,
   Lightbulb,
+  ListTodo,
   Loader2,
   MessageSquareQuote,
   Sparkles,
   ToggleLeft,
   ToggleRight,
 } from "lucide-react";
-import { useEffect, useMemo, useRef } from "react";
-import type { AssistSuggestion, AssistTurn, TranscriptSegment } from "@mila/shared";
+import { useMemo } from "react";
+import type {
+  AssistMode,
+  AssistSuggestion,
+  AssistTurn,
+  TranscriptSegment,
+} from "@mila/shared";
 
-// Wait for the transcript to settle before auto-asking, so we don't fire on
-// every interim chunk while someone is mid-sentence.
-const AUTO_DEBOUNCE_MS = 1200;
 // Only the tail of the conversation matters for "what do I say next".
 const MAX_TURNS = 12;
 
@@ -29,7 +34,7 @@ export interface LiveAssistPanelProps {
   pending: boolean;
   suggestion: AssistSuggestion | null;
   unavailableReason: "no-model" | "no-suggestion" | null;
-  onRequest: (turns: AssistTurn[], manual: boolean) => void;
+  onRequest: (turns: AssistTurn[], manual: boolean, mode?: AssistMode) => void;
 }
 
 export function LiveAssistPanel({
@@ -43,28 +48,6 @@ export function LiveAssistPanel({
   onRequest,
 }: LiveAssistPanelProps) {
   const turns = useMemo(() => buildAssistTurns(segments), [segments]);
-  const lastAutoKeyRef = useRef<string | null>(null);
-
-  // Auto-suggest: when coaching is on and the mic is live, ask the server
-  // shortly after each new piece of transcript. The server gates on whether the
-  // other side actually handed the floor over (a question / hand-off / finished
-  // turn), so most ticks are cheap no-ops. Deduped on the latest segment id so
-  // a settled transcript doesn't re-fire for the same tail.
-  useEffect(() => {
-    if (!enabled || !isLive) {
-      lastAutoKeyRef.current = null;
-      return;
-    }
-    const key = segments.length ? segments[segments.length - 1]!.id : null;
-    if (!key || key === lastAutoKeyRef.current || turns.length === 0) {
-      return;
-    }
-    const timer = window.setTimeout(() => {
-      lastAutoKeyRef.current = key;
-      onRequest(turns, false);
-    }, AUTO_DEBOUNCE_MS);
-    return () => window.clearTimeout(timer);
-  }, [enabled, isLive, segments, turns, onRequest]);
 
   const canRequest = isLive && !pending && turns.length > 0;
 
@@ -80,40 +63,18 @@ export function LiveAssistPanel({
               Live coaching
             </div>
             <div className="mila-muted text-xs">
-              Private talking points — what to say next
+              On-demand talking points — what to say next
             </div>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          {enabled && (
-            <button
-              type="button"
-              onClick={() => onRequest(turns, true)}
-              disabled={!canRequest}
-              className={pillButtonClass}
-              title={
-                isLive
-                  ? "Suggest a reply now"
-                  : "Start the mic to get suggestions"
-              }
-            >
-              {pending ? (
-                <Loader2 size={15} className="animate-spin" />
-              ) : (
-                <MessageSquareQuote size={15} />
-              )}
-              <span>{pending ? "Thinking…" : "Suggest a reply"}</span>
-            </button>
-          )}
           <button
             type="button"
             aria-pressed={enabled}
             onClick={() => onEnabledChange(!enabled)}
             className="text-[var(--accent)] transition hover:text-[var(--foreground)]"
-            title={
-              enabled ? "Turn off live coaching" : "Turn on live coaching"
-            }
+            title={enabled ? "Turn off live coaching" : "Turn on live coaching"}
           >
             {enabled ? <ToggleRight size={28} /> : <ToggleLeft size={28} />}
           </button>
@@ -122,12 +83,47 @@ export function LiveAssistPanel({
 
       {enabled && (
         <div className="mt-3">
+          <div className="mb-3 grid grid-cols-2 gap-2 md:grid-cols-4">
+            <PromptButton
+              label="Suggest reply"
+              title="Suggest talking points for what to say next"
+              icon={MessageSquareQuote}
+              pending={pending}
+              disabled={!canRequest}
+              onClick={() => onRequest(turns, true, "reply")}
+            />
+            <PromptButton
+              label="Catch up"
+              title="Summarize the recent conversation"
+              icon={History}
+              pending={false}
+              disabled={!canRequest}
+              onClick={() => onRequest(turns, true, "catch-up")}
+            />
+            <PromptButton
+              label="Actions"
+              title="Show action items captured so far"
+              icon={ListTodo}
+              pending={false}
+              disabled={!canRequest}
+              onClick={() => onRequest(turns, true, "actions")}
+            />
+            <PromptButton
+              label="Decisions"
+              title="Show decisions captured so far"
+              icon={CheckCircle2}
+              pending={false}
+              disabled={!canRequest}
+              onClick={() => onRequest(turns, true, "decisions")}
+            />
+          </div>
           {suggestion ? (
             <SuggestionCard suggestion={suggestion} />
           ) : unavailableReason === "no-model" ? (
             <AssistHint>
-              No language model is configured on the server yet, so Mila can&apos;t
-              coach you. Connect an LLM provider to enable live coaching.
+              No language model is configured on the server yet, so Mila
+              can&apos;t coach you. Connect an LLM provider to enable live
+              coaching.
             </AssistHint>
           ) : pending ? (
             <AssistHint>
@@ -136,8 +132,9 @@ export function LiveAssistPanel({
             </AssistHint>
           ) : isLive ? (
             <AssistHint>
-              Listening — Mila will suggest what to say when it&apos;s your turn,
-              or press <span className="font-medium">Suggest a reply</span>.
+              Listening for transcript context. Press{" "}
+              <span className="font-medium">Suggest a reply</span> when you want
+              coaching.
             </AssistHint>
           ) : (
             <AssistHint>
@@ -147,6 +144,35 @@ export function LiveAssistPanel({
         </div>
       )}
     </div>
+  );
+}
+
+function PromptButton({
+  label,
+  title,
+  icon: Icon,
+  pending,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  title: string;
+  icon: typeof MessageSquareQuote;
+  pending: boolean;
+  disabled: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={pillButtonClass}
+      title={title}
+    >
+      {pending ? <Loader2 size={15} className="animate-spin" /> : <Icon size={15} />}
+      <span>{pending ? "Thinking…" : label}</span>
+    </button>
   );
 }
 
@@ -220,15 +246,12 @@ function AssistHint({ children }: { children: React.ReactNode }) {
   );
 }
 
-// Web capture is mic-only and can't separate voices, so we treat the captured
-// conversation as the other party ("them") — the "help me answer what I'm
-// hearing" case the copilot is for. The desktop loopback path (B4) provides a
-// clean me/them split.
 function buildAssistTurns(segments: TranscriptSegment[]): AssistTurn[] {
   return segments
     .slice(-MAX_TURNS)
     .map((segment) => ({
-      speaker: "them" as const,
+      speaker:
+        segment.speakerId === "self" ? ("me" as const) : ("them" as const),
       text: (
         segment.translatedText ||
         segment.normalizedText ||
